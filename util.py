@@ -154,14 +154,39 @@ def to_numpy(x):
 def save_point_cloud(coord, color=None, file_path="pc.ply", logger=None):
     os.makedirs(os.path.dirname(file_path), exist_ok=True)
     coord = to_numpy(coord)
+    #print("Coord: ", coord)
+    #print(coord.size)
     if color is not None:
         color = to_numpy(color)
+    #print("Color: ", color)
+    #print(color.size)
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(coord)
     pcd.colors = o3d.utility.Vector3dVector(np.ones_like(coord) if color is None else color)
     o3d.io.write_point_cloud(file_path, pcd)
     if logger is not None:
         logger.info(f"Save Point Cloud to: {file_path}")
+
+def read_point_cloud(file_path="pc.ply", logger=None):
+    
+    if not os.path.exists(file_path):
+        if logger:
+            logger.error(f"File {file_path} does not exist.")
+        return None, None
+
+    pcd = o3d.io.read_point_cloud(file_path)
+    if not pcd:
+        if logger:
+            logger.error(f"Failed to read point cloud from {file_path}.")
+        return None, None
+
+    coord = np.asarray(pcd.points)
+    color = np.asarray(pcd.colors) if np.asarray(pcd.colors).size != 0 else None
+
+    if logger:
+        logger.info(f"Read Point Cloud from: {file_path}")
+
+    return coord, color
 
 
 def remove_small_group(group_ids, th):
@@ -213,13 +238,15 @@ def visualize_3d(data_dict, text_feat_path, save_path):
     visualize_pcd(data_dict["coord"], data_dict["color"], labels, save_path)
 
 
-def visualize_pcd(coord, pcd_color, labels, save_path):
+def visualize_pcd(coord, pcd_color, labels, save_path, islabel=False):
     # alpha = 0.5
-    label_color = np.array([SCANNET_COLOR_MAP_20[label] for label in labels])
-    # overlay = (pcd_color * (1-alpha) + label_color * alpha).astype(np.uint8) / 255
-    label_color = label_color / 255
-    save_point_cloud(coord, label_color, save_path)
-
+    if islabel:
+        #label_color = np.array([SCANNET_COLOR_MAP_20[label] for label in labels])
+        # overlay = (pcd_color * (1-alpha) + label_color * alpha).astype(np.uint8) / 255
+        save_point_cloud(coord, labels, save_path)
+    else:
+        pcd_color = pcd_color / 255
+        save_point_cloud(coord, pcd_color, save_path) 
 
 def visualize_2d(img_color, labels, img_size, save_path):
     import matplotlib.pyplot as plt
