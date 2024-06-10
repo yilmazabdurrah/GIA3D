@@ -217,6 +217,7 @@ def num_to_natural(group_ids):
     array = mapping[array + 1]
     return array
 
+
 def get_matching_indices(pcd0, pcd1, search_voxel_size, K=None):
     match_inds = []
     scene_coord = torch.tensor(np.asarray(pcd0.points)).cuda().contiguous().float()
@@ -231,8 +232,11 @@ def get_matching_indices(pcd0, pcd1, search_voxel_size, K=None):
     for i in range(scene_coord.shape[0]):
         if dis[i] < search_voxel_size:
             match_inds.append([i,indices[i]])
-
+    
     return match_inds
+
+    
+
 
 def visualize_3d(data_dict, text_feat_path, save_path):
     text_feat = torch.load(text_feat_path)
