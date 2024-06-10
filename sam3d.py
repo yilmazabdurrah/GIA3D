@@ -2,6 +2,9 @@
 Main Script
 
 Author: Yunhan Yang (yhyang.myron@gmail.com)
+
+Updated by
+Abdurrahman Yilmaz (ayilmaz@lincoln.ac.uk) v00 original
 """
 
 import os
@@ -22,7 +25,6 @@ from PIL import Image
 from os.path import join
 from util import *
 
-
 def pcd_ensemble(org_path, new_path, data_path, vis_path):
     new_pcd = torch.load(new_path)
     new_pcd = num_to_natural(remove_small_group(new_pcd, 20))
@@ -35,7 +37,6 @@ def pcd_ensemble(org_path, new_path, data_path, vis_path):
     data = torch.load(data_path)
     visualize_partition(data["coord"], new_group, vis_path)
 
-
 def get_sam(image, mask_generator):
     masks = mask_generator.generate(image)
     group_ids = np.full((image.shape[0], image.shape[1]), -1, dtype=int)
@@ -47,9 +48,8 @@ def get_sam(image, mask_generator):
         group_counter += 1
     return group_ids
 
-
 def get_pcd(scene_name, color_name, rgb_path, mask_generator, save_2dmask_path):
-    intrinsic_path = join(rgb_path, scene_name, 'intrinsics', 'intrinsic_depth.txt')
+    intrinsic_path = join(rgb_path, scene_name,'intrinsics_depth.txt') #intrinsic_path = join(rgb_path, scene_name, 'intrinsics', 'intrinsic_depth.txt')
     depth_intrinsic = np.loadtxt(intrinsic_path)
 
     pose = join(rgb_path, scene_name, 'pose', color_name[0:-4] + '.txt')
@@ -110,7 +110,6 @@ def get_pcd(scene_name, color_name, rgb_path, mask_generator, save_2dmask_path):
     save_dict = dict(coord=points_world[:,:3], color=colors, group=group_ids)
     return save_dict
 
-
 def make_open3d_point_cloud(input_dict, voxelize, th):
     input_dict["group"] = remove_small_group(input_dict["group"], th)
     # input_dict = voxelize(input_dict)
@@ -121,7 +120,6 @@ def make_open3d_point_cloud(input_dict, voxelize, th):
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(xyz)
     return pcd
-
 
 def cal_group(input_dict, new_input_dict, match_inds, ratio=0.5):
     group_0 = input_dict["group"]
@@ -161,7 +159,6 @@ def cal_group(input_dict, new_input_dict, match_inds, ratio=0.5):
             group_1[group_1 == group_i] = group_j
     return group_1
 
-
 def cal_2_scenes(pcd_list, index, voxel_size, voxelize, th=50):
     if len(index) == 1:
         return(pcd_list[index[0]])
@@ -199,7 +196,6 @@ def cal_2_scenes(pcd_list, index, voxel_size, voxelize, th=50):
     pcd_dict = voxelize(pcd_dict)
     return pcd_dict
 
-
 def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_size, voxelize, th, train_scenes, val_scenes, save_2dmask_path):
     print(scene_name, flush=True)
     if os.path.exists(join(save_path, scene_name + ".pth")):
@@ -230,6 +226,8 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
         scene_path = join(data_path, "train", scene_name + ".pth")
     elif scene_name in val_scenes:
         scene_path = join(data_path, "val", scene_name + ".pth")
+    else: 
+        scene_path = join(data_path, "test", scene_name + ".pth")
     data_dict = torch.load(scene_path)
     scene_coord = torch.tensor(data_dict["coord"]).cuda().contiguous()
     new_offset = torch.tensor(scene_coord.shape[0]).cuda()
@@ -243,7 +241,6 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
     group[mask_dis] = -1
     group = group.astype(np.int16)
     torch.save(num_to_natural(group), join(save_path, scene_name + ".pth"))
-
 
 def get_args():
     '''Command line arguments.'''
@@ -263,7 +260,6 @@ def get_args():
 
     args = parser.parse_args()
     return args
-
 
 if __name__ == '__main__':
     args = get_args()
