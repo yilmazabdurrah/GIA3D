@@ -235,8 +235,6 @@ def get_matching_indices(pcd0, pcd1, search_voxel_size, K=None):
     
     return match_inds
 
-    
-
 
 def visualize_3d(data_dict, text_feat_path, save_path):
     text_feat = torch.load(text_feat_path)
