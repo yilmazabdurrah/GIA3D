@@ -1,0 +1,16 @@
+output.txt
+output/
+output_global_merger/
+sam3d_AY_v01.py
+sam3d_AY_v02.py
+libs/pointops/build/
+libs/pointops/dist/
+libs/pointops/pointops.egg-info/
+libs/pointops/cuda_12.0.0_525.60.13_linux.run
+scannet-preprocess/processed_dataset/
+scannet-preprocess/raw_dataset/
+ScanNetv2_Downloads/
+codebase/
+__pycache__/
+HowToRun.md
+visualize_save.py
