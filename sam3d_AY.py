@@ -251,7 +251,7 @@ def cal_scenes(pcd_list, index, voxel_size, voxelize, th=50):
     #input_dict_1 = [pcd for i, pcd in enumerate(pcd_list) if i != index]
     input_dict_1 = {}
     pcd0 = make_open3d_point_cloud(input_dict_0, voxelize, th)
-    pcd0_tree = o3d.geometry.KDTreeFlann(copy.deepcopy(pcd0))
+    #pcd0_tree = o3d.geometry.KDTreeFlann(copy.deepcopy(pcd0))
     merged_graph = nx.DiGraph()
     for i, pcd_dict in enumerate(pcd_list):
         if i != index:
@@ -266,7 +266,8 @@ def cal_scenes(pcd_list, index, voxel_size, voxelize, th=50):
                 return input_dict_0
 
             # Cal Dul-overlap
-            match_inds = get_matching_indices(pcd1, pcd0_tree, 1.5 * voxel_size, 1)
+            #match_inds = get_matching_indices(pcd1, pcd0_tree, 1.5 * voxel_size, 1)
+            match_inds = get_matching_indices(pcd1, pcd0, 1.5 * voxel_size, 1)
             correspondence_graph = cal_graph(input_dict_0, input_dict_1, match_inds)
             if len(correspondence_graph.nodes) > 0 and len(correspondence_graph.edges) > 0:
                 merged_graph = nx.compose(merged_graph, correspondence_graph)
@@ -306,13 +307,15 @@ def cal_2_scenes(pcd_list, index, voxel_size, voxelize, th=50):
         return input_dict_0
 
     # Cal Dul-overlap
-    pcd0_tree = o3d.geometry.KDTreeFlann(copy.deepcopy(pcd0))
-    match_inds = get_matching_indices(pcd1, pcd0_tree, 1.5 * voxel_size, 1)
+    #pcd0_tree = o3d.geometry.KDTreeFlann(copy.deepcopy(pcd0))
+    #match_inds = get_matching_indices(pcd1, pcd0_tree, 1.5 * voxel_size, 1)
+    match_inds = get_matching_indices(pcd1, pcd0, 1.5 * voxel_size, 1)
     pcd1_new_group = cal_group(input_dict_0, input_dict_1, match_inds)
     # print(pcd1_new_group)
 
-    pcd1_tree = o3d.geometry.KDTreeFlann(copy.deepcopy(pcd1))
-    match_inds = get_matching_indices(pcd0, pcd1_tree, 1.5 * voxel_size, 1)
+    #pcd1_tree = o3d.geometry.KDTreeFlann(copy.deepcopy(pcd1))
+    #match_inds = get_matching_indices(pcd0, pcd1_tree, 1.5 * voxel_size, 1)
+    match_inds = get_matching_indices(pcd0, pcd1, 1.5 * voxel_size, 1)
     input_dict_1["group"] = pcd1_new_group
     pcd0_new_group = cal_group(input_dict_1, input_dict_0, match_inds)
     # print(pcd0_new_group)
