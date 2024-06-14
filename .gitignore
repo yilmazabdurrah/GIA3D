@@ -1,8 +1,7 @@
 output.txt
 output/
 output_global_merger/
-sam3d_AY_v01.py
-sam3d_AY_v02.py
+sam_old_scripts/
 libs/pointops/build/
 libs/pointops/dist/
 libs/pointops/pointops.egg-info/

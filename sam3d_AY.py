@@ -4,8 +4,8 @@ Main Script
 Author: Yunhan Yang (yhyang.myron@gmail.com)
 
 Updated by
-Abdurrahman Yilmaz (ayilmaz@lincoln.ac.uk) v03
-10 Jun 2024
+Abdurrahman Yilmaz (ayilmaz@lincoln.ac.uk) v04
+12 Jun 2024
 """
 
 import os
@@ -29,12 +29,10 @@ from util import *
 import networkx as nx
 import matplotlib.pyplot as plt
 
-verbose = True # To print out intermediate data
+from scipy.cluster.hierarchy import linkage, fcluster
+from scipy.spatial.distance import squareform
 
-# Create directed graphes for conflicts and correspondences
-conflict_graph = nx.DiGraph()
-
-print("Correspondence and Conflict Graph Trees are initialized")
+verbose = False # To print out intermediate data
 
 def pcd_ensemble(org_path, new_path, data_path, vis_path):
     new_pcd = torch.load(new_path)
@@ -184,14 +182,32 @@ def cal_group(input_dict, new_input_dict, match_inds, ratio=0.5):
             group_1[group_1 == group_i] = group_j
     return group_1
 
+
+def custom_hash_3d_coordinate(x, y, z):
+    """Generate a custom hash value for a 3D coordinate."""
+    # Example custom hash function
+    return hash((x, y, z))
+
+def normalized_feature_difference(f_i, f_j):
+    # Calculate the Euclidean norm of the difference
+    difference_norm = np.linalg.norm(f_i - f_j)
+    # Normalize the difference norm
+    normalized_difference = difference_norm / 4
+    return normalized_difference
+
 # Mask ID correspondence between all frames
-def cal_graph(input_dict, new_input_dict, match_inds):
+def cal_graph(input_dict, new_input_dict, match_inds,  hash_table):
     group_0 = input_dict["group"]
     group_1 = new_input_dict["group"]
+    coord_0 = input_dict["coord"]
+    coord_1 = new_input_dict["coord"]
     view_ids_0 = input_dict["viewpoint_id"]
     view_ids_1 = new_input_dict["viewpoint_id"]
     view_names_0 = input_dict["viewpoint_name"]
     view_names_1 = new_input_dict["viewpoint_name"]
+
+    unique_nodes_0 = list(set(zip(view_names_0, group_0)))
+    unique_nodes_1 = list(set(zip(view_names_1, group_1)))
 
     features_0 = input_dict["feature"]
     features_1 = new_input_dict["feature"]
@@ -199,19 +215,35 @@ def cal_graph(input_dict, new_input_dict, match_inds):
     stability_scores_1 = new_input_dict["stability_score"]
     predicted_ious_0 = input_dict["predicted_iou"]
     predicted_ious_1 = new_input_dict["predicted_iou"]
-    
-    # Initialize the graph
-    correspondence_graph = nx.DiGraph()    
 
     # Calculate the group number correspondence of overlapping points
     group_overlap = {}
+    point_cnt_group_0 = {}
+    point_cnt_group_1 = {}
+    cost = {}
+
+    unique_values_group_0 = set(group_0)
+
+    for unique_value in unique_values_group_0:
+        point_cnt_group_0[unique_value] = sum(1 for element in group_0 if element == unique_value)
+
+    unique_values_group_1 = set(group_1)
+
+    for unique_value in unique_values_group_1:
+        point_cnt_group_1[unique_value] = sum(1 for element in group_1 if element == unique_value)
+
+    #print("Counts for group 0 ", point_cnt_group_0)
+    #print("Counts for group 1 ", point_cnt_group_1)
+
     for i, j in match_inds:
         group_i = group_1[i]
         group_j = group_0[j]
         view_id_i = view_ids_1[i]
         view_id_j = view_ids_0[j]
+        
         view_name_i = view_names_1[i]
         view_name_j = view_names_0[j]
+        coord_i = coord_1[i]
 
         feature_i = features_1[i]
         feature_j = features_0[j]
@@ -227,34 +259,62 @@ def cal_graph(input_dict, new_input_dict, match_inds):
             continue
         if group_j == -1:
             continue'''
-        overlap_key = (group_i, view_id_i, view_name_i, group_j, view_id_j, view_name_j)
-        print("overlap_key: ", overlap_key, " and features: ", feature_i, feature_j)
+        
+        if group_i == -1 or group_j == -1:
+            continue
+        '''elif group_i == -1:
+            group_1[i] = group_0[j]
+            group_i = group_j
+            new_input_dict["group"][i] = group_0[j]'''
+
+        overlap_key = (group_i, view_id_i, view_name_i, point_cnt_group_1[group_i], group_j, view_id_j, view_name_j, point_cnt_group_0[group_j])
+        #print("overlap_key: ", overlap_key, " and features: ", feature_i, feature_j)
         if overlap_key not in group_overlap:
             group_overlap[overlap_key] = 0
+            cost[overlap_key] = 0
         group_overlap[overlap_key] += 1
+        '''if group_i == -1 and group_j == -1:
+            cost[overlap_key] += 3
+        elif group_i == -1 or group_j == -1:
+            continue
+        else:'''
+        cost[overlap_key] += normalized_feature_difference(feature_i,feature_j) + abs(stability_score_i - stability_score_j) + abs(predicted_iou_i - predicted_iou_j)
+
+    print("cost: ", cost)
+
+    # Initialize the graph
+    correspondence_graph = nx.DiGraph()   
+
+    for node in unique_nodes_0:
+        correspondence_graph.add_node(node)
+    for node in unique_nodes_1:
+        correspondence_graph.add_node(node)
 
     # Add edges based on group_overlap
-    for (group_i, view_id_i, view_name_i, group_j, view_id_j, view_name_j), count in group_overlap.items():
+    for (group_i, view_id_i, view_name_i, point_cnt_group_i, group_j, view_id_j, view_name_j, point_cnt_group_j), count in group_overlap.items():
+        cost[(group_i, view_id_i, view_name_i, point_cnt_group_i, group_j, view_id_j, view_name_j, point_cnt_group_j)] /= count
+        cost[(group_i, view_id_i, view_name_i, point_cnt_group_i, group_j, view_id_j, view_name_j, point_cnt_group_j)] += max(0,(1 - count/min(point_cnt_group_i,point_cnt_group_j)))
+        cost[(group_i, view_id_i, view_name_i, point_cnt_group_i, group_j, view_id_j, view_name_j, point_cnt_group_j)] /= 4 # divide the number of components in cost function
         correspondence_graph.add_edge(
                 (view_name_i, group_i), 
                 (view_name_j, group_j), 
-                count=count, 
+                count_common=count,
+                count_total=[point_cnt_group_i,point_cnt_group_j],
+                cost = cost[(group_i, view_id_i, view_name_i, point_cnt_group_i, group_j, view_id_j, view_name_j, point_cnt_group_j)],
                 viewpoint_id_0=view_id_j, 
                 viewpoint_id_1=view_id_i
             )
 
-    return correspondence_graph
+    return correspondence_graph, hash_table, input_dict, new_input_dict
 
-def cal_scenes(pcd_list, index, voxel_size, voxelize, th=50):
+def cal_scenes(pcd_list, index, hash_table, voxel_size, voxelize, th=50):
     # print(index, flush=True)
     input_dict_0 = pcd_list[index]
-    #input_dict_1 = [pcd for i, pcd in enumerate(pcd_list) if i != index]
     input_dict_1 = {}
     pcd0 = make_open3d_point_cloud(input_dict_0, voxelize, th)
-    #pcd0_tree = o3d.geometry.KDTreeFlann(copy.deepcopy(pcd0))
     merged_graph = nx.DiGraph()
     for i, pcd_dict in enumerate(pcd_list):
-        if i != index:
+        if i > index: # i != index:
             input_dict_1.update(pcd_dict)
             pcd1 = make_open3d_point_cloud(input_dict_1, voxelize, th)
             if pcd0 == None:
@@ -266,29 +326,15 @@ def cal_scenes(pcd_list, index, voxel_size, voxelize, th=50):
                 return input_dict_0
 
             # Cal Dul-overlap
-            #match_inds = get_matching_indices(pcd1, pcd0_tree, 1.5 * voxel_size, 1)
             match_inds = get_matching_indices(pcd1, pcd0, 1.5 * voxel_size, 1)
-            correspondence_graph = cal_graph(input_dict_0, input_dict_1, match_inds)
-            if len(correspondence_graph.nodes) > 0 and len(correspondence_graph.edges) > 0:
-                merged_graph = nx.compose(merged_graph, correspondence_graph)
+            if match_inds:
+                correspondence_graph, hash_table, input_dict_0, input_dict_1 = cal_graph(input_dict_0, input_dict_1, match_inds, hash_table)
+                pcd_list[i].update(input_dict_1)
+                pcd_list[index].update(input_dict_0)
+                if len(correspondence_graph.nodes) > 0 and len(correspondence_graph.edges) > 0:
+                    merged_graph = nx.compose(merged_graph, correspondence_graph)
 
-    #pcd1_new_group, graph1 = cal_group(input_dict_0, input_dict_1, match_inds)
-    # print(pcd1_new_group)
-
-    #pcd1_tree = o3d.geometry.KDTreeFlann(copy.deepcopy(pcd1))
-    #match_inds = get_matching_indices(pcd0, pcd1_tree, 1.5 * voxel_size, 1)
-    #input_dict_1["group"] = pcd1_new_group
-    #pcd0_new_group, graph0 = cal_group(input_dict_1, input_dict_0, match_inds)
-    # print(pcd0_new_group)
-
-    #pcd_new_group = np.concatenate((pcd0_new_group, pcd1_new_group), axis=0)
-    #pcd_new_group = num_to_natural(pcd_new_group)
-    #pcd_new_coord = np.concatenate((input_dict_0["coord"], input_dict_1["coord"]), axis=0)
-    #pcd_new_color = np.concatenate((input_dict_0["color"], input_dict_1["color"]), axis=0)
-    #pcd_dict = dict(coord=pcd_new_coord, color=pcd_new_color, group=pcd_new_group)
-
-    #pcd_dict = voxelize(pcd_dict)
-    return merged_graph
+    return merged_graph, hash_table, pcd_list
 
 def cal_2_scenes(pcd_list, index, voxel_size, voxelize, th=50):
     if len(index) == 1:
@@ -307,14 +353,10 @@ def cal_2_scenes(pcd_list, index, voxel_size, voxelize, th=50):
         return input_dict_0
 
     # Cal Dul-overlap
-    #pcd0_tree = o3d.geometry.KDTreeFlann(copy.deepcopy(pcd0))
-    #match_inds = get_matching_indices(pcd1, pcd0_tree, 1.5 * voxel_size, 1)
     match_inds = get_matching_indices(pcd1, pcd0, 1.5 * voxel_size, 1)
     pcd1_new_group = cal_group(input_dict_0, input_dict_1, match_inds)
     # print(pcd1_new_group)
 
-    #pcd1_tree = o3d.geometry.KDTreeFlann(copy.deepcopy(pcd1))
-    #match_inds = get_matching_indices(pcd0, pcd1_tree, 1.5 * voxel_size, 1)
     match_inds = get_matching_indices(pcd0, pcd1, 1.5 * voxel_size, 1)
     input_dict_1["group"] = pcd1_new_group
     pcd0_new_group = cal_group(input_dict_1, input_dict_0, match_inds)
@@ -328,6 +370,22 @@ def cal_2_scenes(pcd_list, index, voxel_size, voxelize, th=50):
 
     pcd_dict = voxelize(pcd_dict)
     return pcd_dict
+
+def update_dictionary(pcd_list_, merged_nodes):
+    for node, representative in merged_nodes.items():
+        view_name, group_id = node
+        rep_view_name, rep_group_id = representative
+
+        # Find the index in pcd_list_ corresponding to the view_name
+        index = next(i for i, d in enumerate(pcd_list_) if d["viewpoint_name"] == view_name)
+        rep_index = next(i for i, d in enumerate(pcd_list_) if d["viewpoint_name"] == rep_view_name)
+
+        # Update the group field
+        group = pcd_list_[index]["group"]
+        rep_group = pcd_list_[rep_index]["group"]
+        group[group == group_id] = rep_group_id
+
+    return pcd_list_
 
 # Focus on this function for global mask_ID solution
 def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_size, voxelize, th, train_scenes, val_scenes, save_2dmask_path):
@@ -354,8 +412,8 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
 
         pcd_dict.update(viewpoint_id=viewpoint_ids, viewpoint_name=viewpoint_names)
 
-        if verbose:
-            # Extract data from the dictionary
+        '''if verbose:
+            # Extract data from tvoxelizedhe dictionary
             coords = pcd_dict['coord']
             colors = pcd_dict['color']
             group_ids = pcd_dict['group']
@@ -372,22 +430,22 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
                 coord_str = ', '.join(map(str, coord))
                 color_str = ', '.join(map(str, color))
                 feature_str = ', '.join(map(str, feature))
-                if group_id == -1:
-                    print(f"{viewpoint_id:<10} {coord_str:<65} {color_str:<20} {group_id:<10} {stability_score:<20} {predicted_iou:<20} {feature_str:<40}")
+                #if group_id == -1:
+                print(f"{viewpoint_id:<10} {coord_str:<65} {color_str:<20} {group_id:<10} {stability_score:<20} {predicted_iou:<20} {feature_str:<40}")'''
 
-        pcd_dict = voxelize(pcd_dict)
         pcd_dict_ = voxelize_new(pcd_dict)
+        pcd_dict = voxelize(pcd_dict)
 
         if verbose:
             # Extract data from the dictionary
-            coords = pcd_dict['coord']
-            colors = pcd_dict['color']
-            group_ids = pcd_dict['group']
+            coords = pcd_dict_['coord']
+            colors = pcd_dict_['color']
+            group_ids = pcd_dict_['group']
             #viewpoint_name = pcd_dict['viewpoint_name']
-            viewpoint_ids = pcd_dict['viewpoint_id']
-            stability_scores = pcd_dict['stability_score']
-            predicted_ious = pcd_dict['predicted_iou']
-            features = pcd_dict['feature'] 
+            viewpoint_ids = pcd_dict_['viewpoint_id']
+            stability_scores = pcd_dict_['stability_score']
+            predicted_ious = pcd_dict_['predicted_iou']
+            features = pcd_dict_['feature'] 
 
             # Print the header
             print(f"{'Viewpoint ID':<10} {'Coord':<65} {'Color':<20} {'Group ID':<10} {'Stability Score':<20} {'Prediction IOU':<20} {'Feature':<40}")
@@ -396,8 +454,8 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
                 coord_str = ', '.join(map(str, coord))
                 color_str = ', '.join(map(str, color))
                 feature_str = ', '.join(map(str, feature))
-                if group_id == -1:
-                    print(f"{viewpoint_id:<10} {coord_str:<65} {color_str:<20} {group_id:<10} {stability_score:<20} {predicted_iou:<20} {feature_str:<40}")
+                #if group_id == -1:
+                print(f"{viewpoint_id:<10} {coord_str:<65} {color_str:<20} {group_id:<10} {stability_score:<20} {predicted_iou:<20} {feature_str:<40}")
 
         pcd_list.append(pcd_dict)
         pcd_list_.append(pcd_dict_)
@@ -417,25 +475,114 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
     if len(pcd_list_) != 1:
         print("New Step 2")
         print(len(pcd_list_), flush=True)
+        
+        for index in range(1, len(pcd_list_)):
+            # Get the 'group' value of the elements
+            group_index_last = pcd_list_[index - 1]["group"]
+            group_index = pcd_list_[index]["group"]
+            
+            # Update the current 'group' array
+            group_index[group_index != -1] += group_index_last.max() + 1
+            pcd_list_[index]["group"] = group_index
+
         merged_graph = nx.DiGraph()
+        hash_table = {}
         for indice in range(len(pcd_list_)):
-            corr_graph = cal_scenes(pcd_list_, indice, voxel_size=voxel_size, voxelize=voxelize_new) 
+            corr_graph, hash_table, pcd_list_ = cal_scenes(pcd_list_, indice, hash_table, voxel_size=voxel_size, voxelize=voxelize_new) 
             if len(corr_graph.nodes) > 0 and len(corr_graph.edges) > 0:
                 merged_graph = nx.compose(merged_graph, corr_graph)
                 #print(corr_graph.edges(data=True))
-        
+        #print("==============================================  values {} ".format(list(hash_table.values())))
         #print(merged_graph.edges(data=True))
-        cnt = 0
+
+            # Print all nodes
+        print("Nodes in the graph:")
+        for node in merged_graph.nodes():
+            print(node)
+
+        # Print all edges
+        print("\nEdges in the graph:")
         for u, v, data in merged_graph.edges(data=True):
-            print(f"Viewpoint {u} and viewpoint {v}, {data['count']} points")
-            cnt += 1
-        print("Number of edges in the graph is ", cnt)
+            print(f"From {u} to {v}: {data}")
+
+        # Create cost matrix
+        node_list = list(merged_graph.nodes())
+        node_index = {node: idx for idx, node in enumerate(node_list)}
+
+        # Initialize the cost matrix with infinity
+        large_value = 1e9  # Define a large value to replace infinity
+        cost_matrix = np.full((len(node_list), len(node_list)), large_value)
+
+        for u, v, data in merged_graph.edges(data=True):
+            i, j = node_index[u], node_index[v]
+            cost_matrix[i, j] = data['cost']
+            cost_matrix[j, i] = data['cost'] 
+
+        # Convert the cost matrix to a condensed distance matrix for hierarchical clustering
+        np.fill_diagonal(cost_matrix, 0)
+        condensed_cost_matrix = squareform(cost_matrix)
+    
+        # Perform hierarchical clustering
+        Z = linkage(condensed_cost_matrix, method='average')
+
+        # Set a threshold to determine clusters (tune this threshold based on your data)
+        threshold = 0.15
+        clusters = fcluster(Z, t=threshold, criterion='distance')
+
+        node_to_cluster = {node: cluster for node, cluster in zip(node_list, clusters)}
+
+        # Create a mapping of merged nodes
+        merged_nodes = {}
+        for cluster in set(clusters):
+            cluster_nodes = [node for node, c in node_to_cluster.items() if c == cluster]
+            representative = cluster_nodes[0]
+            for node in cluster_nodes:
+                if node != representative:
+                    merged_nodes[node] = representative
+
+        print("merged_nodes: ", merged_nodes)
+
+        #pcd_list_ = update_dictionary(pcd_list_, merged_nodes)
+
+        # Merge clusters and update the graph
+        merged_graph_min = nx.DiGraph()
+
+        # Create a mapping from old nodes to new nodes
+        cluster_to_node = {}
+        for cluster_id, node in zip(clusters, node_list):
+            if cluster_id not in cluster_to_node:
+                cluster_to_node[cluster_id] = node
+            else:
+                # Merge node attributes (customize this part as needed)
+                merged_node = cluster_to_node[cluster_id]
+                merged_graph_min.add_node(merged_node)
+                cluster_to_node[cluster_id] = merged_node
+        
+        # Add merged nodes to the new graph
+        for cluster_id, node in cluster_to_node.items():
+            merged_graph_min.add_node(node)
+
+        # Add edges to the new graph
+        for u, v, data in merged_graph.edges(data=True):
+            u_new = cluster_to_node[clusters[node_index[u]]]
+            v_new = cluster_to_node[clusters[node_index[v]]]
+            if u_new != v_new:
+                merged_graph_min.add_edge(u_new, v_new, **data)
+
+        # Print nodes and edges of the new graph
+        print("Nodes in the minimized graph:")
+        for node in merged_graph_min.nodes():
+            print(node)
+
+        print("\nEdges in the minimized graph:")
+        for u, v, data in merged_graph_min.edges(data=True):
+            print(f"From {u} to {v}: {data}")
 
         # Visualize all correspondences
-        print("Spring layout, all correspondences")
+        print("Graph printed!!!")
         plt.figure(figsize=(15, 12))
         plt.subplot(1, 1, 1)
-        pos = nx.spring_layout(merged_graph, k=0.1) # k for distance between nodes
+        pos = nx.shell_layout(merged_graph) # k for distance between nodes
         nx.draw(merged_graph, pos, with_labels=True, font_weight='bold', node_size=500)
 
         # Get all edges in the graph
@@ -443,9 +590,10 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
 
         # Draw edge labels for both count and score
         for edge in edges:
-            count = merged_graph[edge[0]][edge[1]]['count']
-            count_label = f"Count: {count}"
-            nx.draw_networkx_edge_labels(merged_graph, pos, edge_labels={edge: count_label})
+            count_common = merged_graph[edge[0]][edge[1]]['count_common']
+            cost = merged_graph[edge[0]][edge[1]]['cost']
+            count_cost_label = f"Count: {count_common}, Cost: {cost}"
+            nx.draw_networkx_edge_labels(merged_graph, pos, edge_labels={edge: count_cost_label})
 
         plt.title(f"Graph Visualization of Correspondences for all images and Mask IDs")
         plt.show() 
