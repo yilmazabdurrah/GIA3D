@@ -37,7 +37,7 @@ class Voxelize(object):
         key = self.hash(discrete_coord)
         idx_sort = np.argsort(key)
         key_sort = key[idx_sort]
-        _, inverse, count = np.unique(key_sort, return_inverse=True, return_counts=True)
+        _, inverse, count = np.unique(key_sort, return_inverse=True, return_counts=True)   
         if self.mode == 'train':  # train mode
             # idx_select = np.cumsum(np.insert(count, 0, 0)[0:-1]) + np.random.randint(0, count.max(), count.size) % count
             idx_select = np.cumsum(np.insert(count, 0, 0)[0:-1])
