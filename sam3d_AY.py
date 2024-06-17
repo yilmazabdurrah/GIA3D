@@ -280,7 +280,7 @@ def cal_graph(input_dict, new_input_dict, match_inds,  hash_table):
         else:'''
         cost[overlap_key] += normalized_feature_difference(feature_i,feature_j) + abs(stability_score_i - stability_score_j) + abs(predicted_iou_i - predicted_iou_j)
 
-    print("cost: ", cost)
+    #print("cost: ", cost)
 
     # Initialize the graph
     correspondence_graph = nx.DiGraph()   
@@ -371,21 +371,73 @@ def cal_2_scenes(pcd_list, index, voxel_size, voxelize, th=50):
     pcd_dict = voxelize(pcd_dict)
     return pcd_dict
 
-def update_dictionary(pcd_list_, merged_nodes):
-    for node, representative in merged_nodes.items():
-        view_name, group_id = node
-        rep_view_name, rep_group_id = representative
+def update_groups_and_merge_dictionaries(pcd_list_, merged_graph_min):
+    # Create a mapping for final groups to ensure all connected nodes have the same group
+    final_group_map = {}
+    
+    grp_cnt = 0
+    for u, v in merged_graph_min.edges():
+        group_u = final_group_map.get(u, None)
+        group_v = final_group_map.get(v, None)
+        
+        if group_u is None and group_v is None:
+            # If neither node has a group assigned, create a new group and assign it to both
+            new_group = grp_cnt
+            grp_cnt += 1
+            final_group_map[u] = new_group
+            final_group_map[v] = new_group
+        elif group_u is not None and group_v is None:
+            # If u has a group but v does not, assign v to u's group
+            final_group_map[v] = group_u
+        elif group_u is None and group_v is not None:
+            # If v has a group but u does not, assign u to v's group
+            final_group_map[u] = group_v
+        elif group_u != group_v:
+            # If both nodes have different groups, unify the groups
+            for node in final_group_map:
+                if final_group_map[node] == group_v:
+                    final_group_map[node] = group_u
 
-        # Find the index in pcd_list_ corresponding to the view_name
-        index = next(i for i, d in enumerate(pcd_list_) if d["viewpoint_name"] == view_name)
-        rep_index = next(i for i, d in enumerate(pcd_list_) if d["viewpoint_name"] == rep_view_name)
+    # Assign unique groups to nodes that are not connected
+    for node in merged_graph_min.nodes():
+        if node not in final_group_map:
+            _, mask = node
+            if mask != -1:
+                final_group_map[node] = grp_cnt
+                grp_cnt += 1
+            else:
+                final_group_map[node] = -1
 
-        # Update the group field
-        group = pcd_list_[index]["group"]
-        rep_group = pcd_list_[rep_index]["group"]
-        group[group == group_id] = rep_group_id
+    # Initialize empty lists for concatenated data
+    all_coords = []
+    all_colors = []
+    all_groups = []
 
-    return pcd_list_
+    # Iterate over the pcd_list_ and update group information
+    for pcd in pcd_list_:
+        viewpoint_name = pcd["viewpoint_name"][0]
+        mask_ids = pcd["group"]
+        
+        # Create a mapping from old mask ids to new group ids
+        new_groups = []
+        for mask_id in mask_ids:
+            if (viewpoint_name, mask_id) in final_group_map:
+                new_groups.append(final_group_map[(viewpoint_name, mask_id)])
+            else:
+                new_groups.append(mask_id)
+        
+        all_coords.append(pcd["coord"])
+        all_colors.append(pcd["color"])
+        all_groups.append(new_groups)
+    
+    # Combine all data into a single dictionary
+    pcd_dict = {
+        "coord": np.concatenate(all_coords, axis=0),
+        "color": np.concatenate(all_colors, axis=0),
+        "group": np.concatenate(all_groups, axis=0)
+    }
+
+    return voxelize(pcd_dict)
 
 # Focus on this function for global mask_ID solution
 def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_size, voxelize, th, train_scenes, val_scenes, save_2dmask_path):
@@ -492,18 +544,7 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
             if len(corr_graph.nodes) > 0 and len(corr_graph.edges) > 0:
                 merged_graph = nx.compose(merged_graph, corr_graph)
                 #print(corr_graph.edges(data=True))
-        #print("==============================================  values {} ".format(list(hash_table.values())))
         #print(merged_graph.edges(data=True))
-
-            # Print all nodes
-        print("Nodes in the graph:")
-        for node in merged_graph.nodes():
-            print(node)
-
-        # Print all edges
-        print("\nEdges in the graph:")
-        for u, v, data in merged_graph.edges(data=True):
-            print(f"From {u} to {v}: {data}")
 
         # Create cost matrix
         node_list = list(merged_graph.nodes())
@@ -540,89 +581,104 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
                 if node != representative:
                     merged_nodes[node] = representative
 
-        print("merged_nodes: ", merged_nodes)
-
-        #pcd_list_ = update_dictionary(pcd_list_, merged_nodes)
+        #print("merged_nodes: ", merged_nodes)
 
         # Merge clusters and update the graph
         merged_graph_min = nx.DiGraph()
 
-        # Create a mapping from old nodes to new nodes
-        cluster_to_node = {}
-        for cluster_id, node in zip(clusters, node_list):
-            if cluster_id not in cluster_to_node:
-                cluster_to_node[cluster_id] = node
-            else:
-                # Merge node attributes (customize this part as needed)
-                merged_node = cluster_to_node[cluster_id]
-                merged_graph_min.add_node(merged_node)
-                cluster_to_node[cluster_id] = merged_node
-        
-        # Add merged nodes to the new graph
-        for cluster_id, node in cluster_to_node.items():
-            merged_graph_min.add_node(node)
+        # Add representative nodes to the new graph
+        for cluster in set(clusters):
+            cluster_nodes = [node for node, c in node_to_cluster.items() if c == cluster]
+            representative = cluster_nodes[0]
+            merged_graph_min.add_node(representative)
 
-        # Add edges to the new graph
+        # Add edges to the new graph only between the representative nodes
         for u, v, data in merged_graph.edges(data=True):
-            u_new = cluster_to_node[clusters[node_index[u]]]
-            v_new = cluster_to_node[clusters[node_index[v]]]
-            if u_new != v_new:
-                merged_graph_min.add_edge(u_new, v_new, **data)
+            v_pos = merged_nodes.get(u)
+
+            if v_pos is not None and v_pos == v:
+                if not merged_graph_min.has_edge(u, v):
+                    merged_graph_min.add_edge(u, v, **data)
 
         # Print nodes and edges of the new graph
-        print("Nodes in the minimized graph:")
+        '''print("Nodes in the minimized graph:")
         for node in merged_graph_min.nodes():
             print(node)
 
         print("\nEdges in the minimized graph:")
         for u, v, data in merged_graph_min.edges(data=True):
-            print(f"From {u} to {v}: {data}")
+            print(f"From {u} to {v}: {data}")'''
+
+        pcd_dict_merged_ = update_groups_and_merge_dictionaries(pcd_list_, merged_graph_min)
 
         # Visualize all correspondences
-        print("Graph printed!!!")
+        '''print("Graph plotted!!!")
         plt.figure(figsize=(15, 12))
         plt.subplot(1, 1, 1)
-        pos = nx.shell_layout(merged_graph) # k for distance between nodes
-        nx.draw(merged_graph, pos, with_labels=True, font_weight='bold', node_size=500)
+        pos = nx.shell_layout(merged_graph_min) # k for distance between nodes
+        nx.draw(merged_graph_min, pos, with_labels=True, font_weight='bold', node_size=500)
 
         # Get all edges in the graph
-        edges = merged_graph.edges()
+        edges = merged_graph_min.edges()
 
         # Draw edge labels for both count and score
         for edge in edges:
-            count_common = merged_graph[edge[0]][edge[1]]['count_common']
-            cost = merged_graph[edge[0]][edge[1]]['cost']
+            count_common = merged_graph_min[edge[0]][edge[1]]['count_common']
+            cost = merged_graph_min[edge[0]][edge[1]]['cost']
             count_cost_label = f"Count: {count_common}, Cost: {cost}"
-            nx.draw_networkx_edge_labels(merged_graph, pos, edge_labels={edge: count_cost_label})
+            nx.draw_networkx_edge_labels(merged_graph_min, pos, edge_labels={edge: count_cost_label})
 
         plt.title(f"Graph Visualization of Correspondences for all images and Mask IDs")
-        plt.show() 
-
-        # Lowest common ancestor for solving
+        plt.show() '''
 
     # Step 3 in pipeline: Region Merging Method
-    seg_dict = pcd_list[0]
-    seg_dict["group"] = num_to_natural(remove_small_group(seg_dict["group"], th))
+    for i in range(2):
+        if i == 0:
+            seg_dict = pcd_list[0]
+            seg_dict["group"] = num_to_natural(remove_small_group(seg_dict["group"], th))
 
-    if scene_name in train_scenes:
-        scene_path = join(data_path, "train", scene_name + ".pth")
-    elif scene_name in val_scenes:
-        scene_path = join(data_path, "val", scene_name + ".pth")
-    else: 
-        scene_path = join(data_path, "test", scene_name + ".pth")
-    data_dict = torch.load(scene_path)
-    scene_coord = torch.tensor(data_dict["coord"]).cuda().contiguous()
-    new_offset = torch.tensor(scene_coord.shape[0]).cuda()
-    gen_coord = torch.tensor(seg_dict["coord"]).cuda().contiguous().float()
-    offset = torch.tensor(gen_coord.shape[0]).cuda()
-    gen_group = seg_dict["group"]
-    indices, dis = pointops.knn_query(1, gen_coord, offset, scene_coord, new_offset)
-    indices = indices.cpu().numpy()
-    group = gen_group[indices.reshape(-1)].astype(np.int16)
-    mask_dis = dis.reshape(-1).cpu().numpy() > 0.6
-    group[mask_dis] = -1
-    group = group.astype(np.int16)
-    torch.save(num_to_natural(group), join(save_path, scene_name + ".pth"))
+            if scene_name in train_scenes:
+                scene_path = join(data_path, "train", scene_name + ".pth")
+            elif scene_name in val_scenes:
+                scene_path = join(data_path, "val", scene_name + ".pth")
+            else: 
+                scene_path = join(data_path, "test", scene_name + ".pth")
+            data_dict = torch.load(scene_path)
+            scene_coord = torch.tensor(data_dict["coord"]).cuda().contiguous()
+            new_offset = torch.tensor(scene_coord.shape[0]).cuda()
+            gen_coord = torch.tensor(seg_dict["coord"]).cuda().contiguous().float()
+            offset = torch.tensor(gen_coord.shape[0]).cuda()
+            gen_group = seg_dict["group"]
+            indices, dis = pointops.knn_query(1, gen_coord, offset, scene_coord, new_offset)
+            indices = indices.cpu().numpy()
+            group = gen_group[indices.reshape(-1)].astype(np.int16)
+            mask_dis = dis.reshape(-1).cpu().numpy() > 0.6
+            group[mask_dis] = -1
+            group = group.astype(np.int16)
+            torch.save(num_to_natural(group), join(save_path, scene_name + ".pth"))
+        elif i == 1:
+            seg_dict = pcd_dict_merged_
+            seg_dict["group"] = num_to_natural(remove_small_group(seg_dict["group"], th))
+
+            if scene_name in train_scenes:
+                scene_path = join(data_path, "train", scene_name + ".pth")
+            elif scene_name in val_scenes:
+                scene_path = join(data_path, "val", scene_name + ".pth")
+            else: 
+                scene_path = join(data_path, "test", scene_name + ".pth")
+            data_dict = torch.load(scene_path)
+            scene_coord = torch.tensor(data_dict["coord"]).cuda().contiguous()
+            new_offset = torch.tensor(scene_coord.shape[0]).cuda()
+            gen_coord = torch.tensor(seg_dict["coord"]).cuda().contiguous().float()
+            offset = torch.tensor(gen_coord.shape[0]).cuda()
+            gen_group = seg_dict["group"]
+            indices, dis = pointops.knn_query(1, gen_coord, offset, scene_coord, new_offset)
+            indices = indices.cpu().numpy()
+            group = gen_group[indices.reshape(-1)].astype(np.int16)
+            mask_dis = dis.reshape(-1).cpu().numpy() > 0.6
+            group[mask_dis] = -1
+            group = group.astype(np.int16)
+            torch.save(num_to_natural(group), join(save_path, scene_name + "_new" + ".pth"))
 
 def get_args():
     '''Command line arguments.'''
