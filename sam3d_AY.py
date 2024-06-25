@@ -33,6 +33,8 @@ from scipy.cluster.hierarchy import linkage, fcluster
 from scipy.spatial.distance import squareform
 
 verbose = False # To print out intermediate data
+verbose_graph = False # To plot correspondence graphs before and after optimization
+verbose_comparisons = True # To plot comparison output
 
 def pcd_ensemble(org_path, new_path, data_path, vis_path):
     new_pcd = torch.load(new_path)
@@ -611,74 +613,69 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
 
         pcd_dict_merged_ = update_groups_and_merge_dictionaries(pcd_list_, merged_graph_min)
 
-        # Visualize all correspondences
-        '''print("Graph plotted!!!")
-        plt.figure(figsize=(15, 12))
-        plt.subplot(1, 1, 1)
-        pos = nx.shell_layout(merged_graph_min) # k for distance between nodes
-        nx.draw(merged_graph_min, pos, with_labels=True, font_weight='bold', node_size=500)
+        if verbose_graph:
+            # Create a figure for subplots
+            plt.figure(figsize=(15, 12))
 
-        # Get all edges in the graph
-        edges = merged_graph_min.edges()
+            # Draw the first graph
+            plt.subplot(1, 2, 1)  # 1 row, 2 columns, 1st subplot
+            draw_graph(merged_graph, "Correspondences for All Viewpoints and Mask IDs before optimization", 121)
 
-        # Draw edge labels for both count and score
-        for edge in edges:
-            count_common = merged_graph_min[edge[0]][edge[1]]['count_common']
-            cost = merged_graph_min[edge[0]][edge[1]]['cost']
-            count_cost_label = f"Count: {count_common}, Cost: {cost}"
-            nx.draw_networkx_edge_labels(merged_graph_min, pos, edge_labels={edge: count_cost_label})
+            # Draw the second graph
+            plt.subplot(1, 2, 2)  # 1 row, 2 columns, 2nd subplot
+            draw_graph(merged_graph_min, "Correspondences for All Viewpoints and Mask IDs after optimization", 122)
 
-        plt.title(f"Graph Visualization of Correspondences for all images and Mask IDs")
-        plt.show() '''
+            # Display the plot
+            plt.show()
 
     # Step 3 in pipeline: Region Merging Method
     for i in range(2):
         if i == 0:
             seg_dict = pcd_list[0]
-            seg_dict["group"] = num_to_natural(remove_small_group(seg_dict["group"], th))
-
-            if scene_name in train_scenes:
-                scene_path = join(data_path, "train", scene_name + ".pth")
-            elif scene_name in val_scenes:
-                scene_path = join(data_path, "val", scene_name + ".pth")
-            else: 
-                scene_path = join(data_path, "test", scene_name + ".pth")
-            data_dict = torch.load(scene_path)
-            scene_coord = torch.tensor(data_dict["coord"]).cuda().contiguous()
-            new_offset = torch.tensor(scene_coord.shape[0]).cuda()
-            gen_coord = torch.tensor(seg_dict["coord"]).cuda().contiguous().float()
-            offset = torch.tensor(gen_coord.shape[0]).cuda()
-            gen_group = seg_dict["group"]
-            indices, dis = pointops.knn_query(1, gen_coord, offset, scene_coord, new_offset)
-            indices = indices.cpu().numpy()
-            group = gen_group[indices.reshape(-1)].astype(np.int16)
-            mask_dis = dis.reshape(-1).cpu().numpy() > 0.6
-            group[mask_dis] = -1
-            group = group.astype(np.int16)
-            torch.save(num_to_natural(group), join(save_path, scene_name + ".pth"))
         elif i == 1:
             seg_dict = pcd_dict_merged_
-            seg_dict["group"] = num_to_natural(remove_small_group(seg_dict["group"], th))
+        else: 
+            seg_dict = pcd_list[0]
+        seg_dict["group"] = num_to_natural(remove_small_group(seg_dict["group"], th))
 
-            if scene_name in train_scenes:
-                scene_path = join(data_path, "train", scene_name + ".pth")
-            elif scene_name in val_scenes:
-                scene_path = join(data_path, "val", scene_name + ".pth")
-            else: 
-                scene_path = join(data_path, "test", scene_name + ".pth")
-            data_dict = torch.load(scene_path)
-            scene_coord = torch.tensor(data_dict["coord"]).cuda().contiguous()
-            new_offset = torch.tensor(scene_coord.shape[0]).cuda()
-            gen_coord = torch.tensor(seg_dict["coord"]).cuda().contiguous().float()
-            offset = torch.tensor(gen_coord.shape[0]).cuda()
-            gen_group = seg_dict["group"]
-            indices, dis = pointops.knn_query(1, gen_coord, offset, scene_coord, new_offset)
-            indices = indices.cpu().numpy()
-            group = gen_group[indices.reshape(-1)].astype(np.int16)
-            mask_dis = dis.reshape(-1).cpu().numpy() > 0.6
-            group[mask_dis] = -1
-            group = group.astype(np.int16)
+        if scene_name in train_scenes:
+            scene_path = join(data_path, "train", scene_name + ".pth")
+        elif scene_name in val_scenes:
+            scene_path = join(data_path, "val", scene_name + ".pth")
+        else: 
+            scene_path = join(data_path, "test", scene_name + ".pth")
+        data_dict = torch.load(scene_path)
+        scene_coord = torch.tensor(data_dict["coord"]).cuda().contiguous()
+        new_offset = torch.tensor(scene_coord.shape[0]).cuda()
+        gen_coord = torch.tensor(seg_dict["coord"]).cuda().contiguous().float()
+        offset = torch.tensor(gen_coord.shape[0]).cuda()
+        gen_group = seg_dict["group"]
+        indices, dis = pointops.knn_query(1, gen_coord, offset, scene_coord, new_offset)
+        indices = indices.cpu().numpy()
+        group = gen_group[indices.reshape(-1)].astype(np.int16)
+        mask_dis = dis.reshape(-1).cpu().numpy() > 0.6
+        group[mask_dis] = -1
+        group = group.astype(np.int16)
+        if i == 0:
+            torch.save(num_to_natural(group), join(save_path, scene_name + ".pth"))
+            labels = np.array(group)
+            coord_ = data_dict["coord"]
+        elif i == 1:
             torch.save(num_to_natural(group), join(save_path, scene_name + "_new" + ".pth"))
+            labels_new = np.array(group)
+        else: 
+            torch.save(num_to_natural(group), join(save_path, scene_name + ".pth"))
+            labels = np.array(group)
+
+    # Comparisons
+    accuracy_metrics = calculate_segmentation_accuracy(coord_, labels, labels_new)
+    if verbose_comparisons:
+        plot_accuracy_metrics(accuracy_metrics, scene_name)
+    else:
+        print(f"Overall Accuracy: {accuracy_metrics['overall_accuracy']}")
+        for instance, accuracy in accuracy_metrics['instance_accuracy'].items():
+            print(f"Instance {instance} Accuracy: {accuracy}")
+    
 
 def get_args():
     '''Command line arguments.'''

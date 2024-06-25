@@ -7,6 +7,12 @@ from PIL import Image
 import json
 # import clip
 import pointops
+from sklearn.metrics import accuracy_score
+from scipy.optimize import linear_sum_assignment
+
+import matplotlib.pyplot as plt
+import networkx as nx
+
 
 
 SCANNET_COLOR_MAP_20 = {-1: (0., 0., 0.), 0: (174., 199., 232.), 1: (152., 223., 138.), 2: (31., 119., 180.), 3: (255., 187., 120.), 4: (188., 189., 34.), 5: (140., 86., 75.),
@@ -144,6 +150,108 @@ def remove_samll_masks(masks, ratio=0.8):
 
     return filtered_masks
 
+
+def draw_graph(graph, title, subplot_position):
+    plt.subplot(subplot_position)
+    pos = nx.shell_layout(graph)
+    nx.draw(graph, pos, with_labels=True, font_weight='bold', node_size=500)
+
+    # Get all edges in the graph
+    edges = graph.edges()
+
+    # Draw edge labels for both count and score
+    for edge in edges:
+        count_common = graph[edge[0]][edge[1]]['count_common']
+        cost = graph[edge[0]][edge[1]]['cost']
+        count_cost_label = f"Count: {count_common}, Cost: {cost}"
+        nx.draw_networkx_edge_labels(graph, pos, edge_labels={edge: count_cost_label})
+
+    plt.title(title)
+
+def plot_accuracy_metrics(accuracy_metrics, scene_name):
+    """
+    Plot accuracy metrics.
+    
+    Parameters:
+        accuracy_metrics (dict): Dictionary containing overall accuracy and instance-wise accuracy.
+    """
+    # Extract overall accuracy and instance-wise accuracy
+    overall_accuracy = accuracy_metrics['overall_accuracy']
+    instance_accuracy = accuracy_metrics['instance_accuracy']
+
+    # Prepare data for plotting
+    group_ids = list(instance_accuracy.keys())
+    accuracies = list(instance_accuracy.values())
+    
+    # Add overall accuracy
+    group_ids.append('Overall')
+    accuracies.append(overall_accuracy)
+
+    # Convert group IDs to string for labeling
+    group_labels = [str(group) for group in group_ids]
+    
+    # Plotting
+    plt.figure(figsize=(12, 6))
+    plt.bar(range(len(group_labels)), accuracies, color='skyblue')
+    plt.xlabel('Group IDs and Overall')
+    plt.ylabel('Accuracy Rate')
+    plt.title(f'Accuracy Metrics for Group IDs and Overall - Scene: {scene_name}')
+    plt.ylim(-0.1, 1.1)  # Accuracy is between 0 and 1
+    plt.xticks(ticks=range(len(group_labels)), labels=group_labels, rotation=45)
+    plt.show()
+
+def calculate_segmentation_accuracy(coords_, predicted_labels, ground_truth_labels):
+    """
+    Calculate the segmentation accuracy metrics.
+    
+    Parameters:
+        coords_ (np.ndarray): Coordinates of the points (not used in accuracy calculation).
+        predicted_labels (np.ndarray): Predicted group labels.
+        ground_truth_labels (np.ndarray): Ground truth group labels.
+    
+    Returns:
+        dict: Dictionary containing overall accuracy and instance-wise accuracy.
+    """
+    
+    # Flatten the group arrays
+    predicted_groups = predicted_labels.flatten()
+    ground_truth_groups = ground_truth_labels.flatten()
+
+    # Calculate the overlap matrix
+    unique_pred = np.unique(predicted_groups)
+    unique_gt = np.unique(ground_truth_groups)
+    
+    overlap_matrix = np.zeros((len(unique_gt), len(unique_pred)), dtype=int)
+    
+    for i, gt_label in enumerate(unique_gt):
+        for j, pred_label in enumerate(unique_pred):
+            overlap_matrix[i, j] = np.sum((ground_truth_groups == gt_label) & (predicted_groups == pred_label))
+    
+    # Find the best match using the Hungarian algorithm
+    row_ind, col_ind = linear_sum_assignment(-overlap_matrix)
+    
+    # Create a mapping from predicted to ground truth labels
+    label_mapping = {unique_pred[col]: unique_gt[row] for row, col in zip(row_ind, col_ind)}
+    
+    # Remap predicted labels
+    remapped_predicted_groups = np.array([label_mapping[label] for label in predicted_groups])
+    
+    # Calculate overall accuracy
+    overall_accuracy = accuracy_score(ground_truth_groups, remapped_predicted_groups)
+    
+    # Calculate instance-wise accuracy
+    instance_accuracy = {}
+    for instance in unique_gt:
+        instance_mask = (ground_truth_groups == instance)
+        instance_accuracy[instance] = accuracy_score(
+            ground_truth_groups[instance_mask],
+            remapped_predicted_groups[instance_mask]
+        )
+    
+    return {
+        "overall_accuracy": overall_accuracy,
+        "instance_accuracy": instance_accuracy
+    }
 
 def to_numpy(x):
     if isinstance(x, torch.Tensor):
