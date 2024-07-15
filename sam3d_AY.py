@@ -4,8 +4,8 @@ Main Script
 Author: Yunhan Yang (yhyang.myron@gmail.com)
 
 Updated by
-Abdurrahman Yilmaz (ayilmaz@lincoln.ac.uk) v04
-12 Jun 2024
+Abdurrahman Yilmaz (ayilmaz@lincoln.ac.uk) v05
+12 Jul 2024
 """
 
 import os
@@ -70,7 +70,8 @@ def get_sam(image, mask_generator):
     return group_ids, stability_scores, predicted_ious, features
 
 def get_pcd(scene_name, color_name, rgb_path, mask_generator, save_2dmask_path):
-    intrinsic_path = join(rgb_path, scene_name,'intrinsics_depth.txt') #intrinsic_path = join(rgb_path, scene_name, 'intrinsics', 'intrinsic_depth.txt')
+    #intrinsic_path = join(rgb_path, scene_name,'intrinsics_depth.txt') 
+    intrinsic_path = join(rgb_path, scene_name, 'intrinsics', 'intrinsic_depth.txt')
     depth_intrinsic = np.loadtxt(intrinsic_path)
 
     pose = join(rgb_path, scene_name, 'pose', color_name[0:-4] + '.txt')
@@ -198,7 +199,7 @@ def normalized_feature_difference(f_i, f_j):
     return normalized_difference
 
 # Mask ID correspondence between all frames
-def cal_graph(input_dict, new_input_dict, match_inds,  hash_table):
+def cal_graph(input_dict, new_input_dict, match_inds):
     group_0 = input_dict["group"]
     group_1 = new_input_dict["group"]
     coord_0 = input_dict["coord"]
@@ -307,10 +308,10 @@ def cal_graph(input_dict, new_input_dict, match_inds,  hash_table):
                 viewpoint_id_1=view_id_i
             )
 
-    return correspondence_graph, hash_table, input_dict, new_input_dict
+    return correspondence_graph, input_dict, new_input_dict
 
-def cal_scenes(pcd_list, index, hash_table, voxel_size, voxelize, th=50):
-    # print(index, flush=True)
+def cal_scenes(pcd_list, index, voxel_size, voxelize, th=50):
+    #print(index, flush=True)
     input_dict_0 = pcd_list[index]
     input_dict_1 = {}
     pcd0 = make_open3d_point_cloud(input_dict_0, voxelize, th)
@@ -320,23 +321,25 @@ def cal_scenes(pcd_list, index, hash_table, voxel_size, voxelize, th=50):
             input_dict_1.update(pcd_dict)
             pcd1 = make_open3d_point_cloud(input_dict_1, voxelize, th)
             if pcd0 == None:
-                if pcd1 == None:
-                    return None
+                if pcd1 == None:                    
+                    return merged_graph, pcd_list
                 else:
-                    return input_dict_1
+                    pcd_list[i].update(input_dict_1)
+                    return merged_graph, pcd_list
             elif pcd1 == None:
-                return input_dict_0
+                pcd_list[index].update(input_dict_0)
+                return merged_graph, pcd_list
 
             # Cal Dul-overlap
             match_inds = get_matching_indices(pcd1, pcd0, 1.5 * voxel_size, 1)
             if match_inds:
-                correspondence_graph, hash_table, input_dict_0, input_dict_1 = cal_graph(input_dict_0, input_dict_1, match_inds, hash_table)
+                correspondence_graph, input_dict_0, input_dict_1 = cal_graph(input_dict_0, input_dict_1, match_inds)
                 pcd_list[i].update(input_dict_1)
                 pcd_list[index].update(input_dict_0)
                 if len(correspondence_graph.nodes) > 0 and len(correspondence_graph.edges) > 0:
                     merged_graph = nx.compose(merged_graph, correspondence_graph)
 
-    return merged_graph, hash_table, pcd_list
+    return merged_graph, pcd_list
 
 def cal_2_scenes(pcd_list, index, voxel_size, voxelize, th=50):
     if len(index) == 1:
@@ -442,7 +445,7 @@ def update_groups_and_merge_dictionaries(pcd_list_, merged_graph_min):
     return voxelize(pcd_dict)
 
 # Focus on this function for global mask_ID solution
-def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_size, voxelize, th, train_scenes, val_scenes, save_2dmask_path):
+def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_size, voxelize, th, train_scenes, val_scenes, save_2dmask_path, gt_data_path):
     print(scene_name, flush=True)
     if os.path.exists(join(save_path, scene_name + ".pth")):
         return
@@ -540,9 +543,8 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
             pcd_list_[index]["group"] = group_index
 
         merged_graph = nx.DiGraph()
-        hash_table = {}
         for indice in range(len(pcd_list_)):
-            corr_graph, hash_table, pcd_list_ = cal_scenes(pcd_list_, indice, hash_table, voxel_size=voxel_size, voxelize=voxelize_new) 
+            corr_graph, pcd_list_ = cal_scenes(pcd_list_, indice, voxel_size=voxel_size, voxelize=voxelize_new) 
             if len(corr_graph.nodes) > 0 and len(corr_graph.edges) > 0:
                 merged_graph = nx.compose(merged_graph, corr_graph)
                 #print(corr_graph.edges(data=True))
@@ -569,7 +571,7 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
         Z = linkage(condensed_cost_matrix, method='average')
 
         # Set a threshold to determine clusters (tune this threshold based on your data)
-        threshold = 0.15
+        threshold = 0.2
         clusters = fcluster(Z, t=threshold, criterion='distance')
 
         node_to_cluster = {node: cluster for node, cluster in zip(node_list, clusters)}
@@ -582,8 +584,6 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
             for node in cluster_nodes:
                 if node != representative:
                     merged_nodes[node] = representative
-
-        #print("merged_nodes: ", merged_nodes)
 
         # Merge clusters and update the graph
         merged_graph_min = nx.DiGraph()
@@ -602,14 +602,14 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
                 if not merged_graph_min.has_edge(u, v):
                     merged_graph_min.add_edge(u, v, **data)
 
-        # Print nodes and edges of the new graph
-        '''print("Nodes in the minimized graph:")
-        for node in merged_graph_min.nodes():
-            print(node)
+        # # Print nodes and edges of the new graph
+        # print("Nodes in the minimized graph:")
+        # for node in merged_graph_min.nodes():
+        #     print(node)
 
-        print("\nEdges in the minimized graph:")
-        for u, v, data in merged_graph_min.edges(data=True):
-            print(f"From {u} to {v}: {data}")'''
+        # print("\nEdges in the minimized graph:")
+        # for u, v, data in merged_graph_min.edges(data=True):
+        #     print(f"From {u} to {v}: {data}")
 
         pcd_dict_merged_ = update_groups_and_merge_dictionaries(pcd_list_, merged_graph_min)
 
@@ -668,13 +668,40 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
             labels = np.array(group)
 
     # Comparisons
-    accuracy_metrics = calculate_segmentation_accuracy(coord_, labels, labels_new)
-    if verbose_comparisons:
-        plot_accuracy_metrics(accuracy_metrics, scene_name)
+
+    # Get GT data for the scene
+
+    if os.path.exists(join(gt_data_path, scene_name, scene_name + "_vh_clean_2.labels.ply")):
+        print(f"Ground truth data exists for {scene_name}")
+
+        points_gt, colors_gt = load_ply(join(gt_data_path, scene_name, scene_name + "_vh_clean_2.labels.ply"))
+
+        labels_gt = get_labels_from_colors(colors_gt)
+        
+        data_dict = {
+            "coord": points_gt,
+            "labels": labels_gt
+        }
+        torch.save(data_dict, join(save_path, scene_name + "_gt.pth"))
+
+        accuracy_metrics = calculate_segmentation_accuracy(coord_, labels, labels_gt)
+        
+        accuracy_metrics_new = calculate_segmentation_accuracy(coord_, labels_new, labels_gt)
+        if verbose_comparisons:
+            plot_accuracy_metrics(accuracy_metrics, scene_name)
+            plot_accuracy_metrics(accuracy_metrics_new, scene_name)
+        else:
+            print(f"Results for classic one")
+            print(f"Overall Accuracy: {accuracy_metrics['overall_accuracy']}")
+            for instance, accuracy in accuracy_metrics['instance_accuracy'].items():
+                print(f"Instance {instance} Accuracy: {accuracy}")
+            
+            print(f"Results for updated one")
+            print(f"Overall Accuracy: {accuracy_metrics_new['overall_accuracy']}")
+            for instance, accuracy in accuracy_metrics_new['instance_accuracy'].items():
+                print(f"Instance {instance} Accuracy: {accuracy}")
     else:
-        print(f"Overall Accuracy: {accuracy_metrics['overall_accuracy']}")
-        for instance, accuracy in accuracy_metrics['instance_accuracy'].items():
-            print(f"Instance {instance} Accuracy: {accuracy}")
+        print(f"Ground truth data does not exist for {scene_name} to compare segmentation results")
     
 
 def get_args():
@@ -692,6 +719,7 @@ def get_args():
     parser.add_argument('--img_size', default=[640,480])
     parser.add_argument('--voxel_size', default=0.05)
     parser.add_argument('--th', default=50, help='threshold of ignoring small groups to avoid noise pixel')
+    parser.add_argument('--gt_data_path', type=str, help='the path of ground truth data')
 
     args = parser.parse_args()
     return args
@@ -711,4 +739,4 @@ if __name__ == '__main__':
     scene_names = sorted(os.listdir(args.rgb_path))
     for scene_name in scene_names:
         seg_pcd(scene_name, args.rgb_path, args.data_path, args.save_path, mask_generator, args.voxel_size, 
-            voxelize, args.th, train_scenes, val_scenes, args.save_2dmask_path)
+            voxelize, args.th, train_scenes, val_scenes, args.save_2dmask_path, args.gt_data_path)

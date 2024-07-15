@@ -1,6 +1,5 @@
 output.txt
-output/
-output_global_merger/
+output*/
 sam_old_scripts/
 libs/pointops/build/
 libs/pointops/dist/
@@ -13,4 +12,4 @@ codebase/
 __pycache__/
 HowToRun.md
 visualize_save.py
-visualize_save_v01.py
+visualize_save_v*.py
