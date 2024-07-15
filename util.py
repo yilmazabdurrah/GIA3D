@@ -13,11 +13,56 @@ from scipy.optimize import linear_sum_assignment
 import matplotlib.pyplot as plt
 import networkx as nx
 
-
+from plyfile import PlyData
 
 SCANNET_COLOR_MAP_20 = {-1: (0., 0., 0.), 0: (174., 199., 232.), 1: (152., 223., 138.), 2: (31., 119., 180.), 3: (255., 187., 120.), 4: (188., 189., 34.), 5: (140., 86., 75.),
                         6: (255., 152., 150.), 7: (214., 39., 40.), 8: (197., 176., 213.), 9: (148., 103., 189.), 10: (196., 156., 148.), 11: (23., 190., 207.), 12: (247., 182., 210.), 
                         13: (219., 219., 141.), 14: (255., 127., 14.), 15: (158., 218., 229.), 16: (44., 160., 44.), 17: (112., 128., 144.), 18: (227., 119., 194.), 19: (82., 84., 163.)}
+
+# Define the dictionary mapping NYU40 class IDs to their RGB values and label names for GT data
+nyu40_colors_to_class = {
+    (0, 0, 0): {"id": -1, "name": "Unknown"},
+    (174, 199, 232): {"id": 1, "name": "Wall"},
+    (152, 223, 138): {"id": 2, "name": "Floor"},
+    (31, 119, 180): {"id": 3, "name": "Cabinet"},
+    (255, 187, 120): {"id": 4, "name": "Bed"},
+    (188, 189, 34): {"id": 5, "name": "Chair"},
+    (140, 86, 75): {"id": 6, "name": "Sofa"},
+    (255, 152, 150): {"id": 7, "name": "Table"},
+    (214, 39, 40): {"id": 8, "name": "Door"},
+    (197, 176, 213): {"id": 9, "name": "Window"},
+    (148, 103, 189): {"id": 10, "name": "Bookshelf"},
+    (196, 156, 148): {"id": 11, "name": "Picture"},
+    (23, 190, 207): {"id": 12, "name": "Counter"},
+    (178, 76, 76): {"id": 13, "name": "Blinds"},
+    (247, 182, 210): {"id": 14, "name": "Desk"},
+    (66, 188, 102): {"id": 15, "name": "Shelves"},
+    (219, 219, 141): {"id": 16, "name": "Curtain"},
+    (140, 57, 197): {"id": 17, "name": "Dresser"},
+    (202, 185, 52): {"id": 18, "name": "Pillow"},
+    (51, 176, 203): {"id": 19, "name": "Mirror"},
+    (200, 54, 131): {"id": 20, "name": "Floor mat"},
+    (92, 193, 61): {"id": 21, "name": "Clothes"},
+    (78, 71, 183): {"id": 22, "name": "Ceiling"},
+    (172, 114, 82): {"id": 23, "name": "Books"},
+    (255, 127, 14): {"id": 24, "name": "Refrigerator"},
+    (91, 163, 138): {"id": 25, "name": "Television"},
+    (153, 98, 156): {"id": 26, "name": "Paper"},
+    (140, 153, 101): {"id": 27, "name": "Towel"},
+    (158, 218, 229): {"id": 28, "name": "Shower curtain"},
+    (100, 125, 154): {"id": 29, "name": "Box"},
+    (178, 127, 135): {"id": 30, "name": "Whiteboard"},
+    (120, 185, 128): {"id": 31, "name": "Person"},
+    (146, 111, 194): {"id": 32, "name": "Nightstand"},
+    (44, 160, 44): {"id": 33, "name": "Toilet"},
+    (112, 128, 144): {"id": 34, "name": "Sink"},
+    (96, 207, 209): {"id": 35, "name": "Lamp"},
+    (227, 119, 194): {"id": 36, "name": "Bathtub"},
+    (213, 92, 176): {"id": 37, "name": "Bag"},
+    (94, 106, 211): {"id": 38, "name": "Other structure"},
+    (82, 84, 163): {"id": 39, "name": "Other furniture"},
+    (100, 85, 144): {"id": 40, "name": "Other prop"},
+}
 
 class Voxelize(object):
     def __init__(self,
@@ -200,6 +245,19 @@ def plot_accuracy_metrics(accuracy_metrics, scene_name):
     plt.xticks(ticks=range(len(group_labels)), labels=group_labels, rotation=45)
     plt.show()
 
+def load_ply(file_path):
+    """
+    Load a PLY file and return the points and their colors.
+
+    :param file_path: Path to the PLY file.
+    :return: List of points and their corresponding colors.
+    """
+    plydata = PlyData.read(file_path)
+    vertex_data = plydata['vertex']
+    points = np.vstack([vertex_data['x'], vertex_data['y'], vertex_data['z']]).T
+    colors = np.vstack([vertex_data['red'], vertex_data['green'], vertex_data['blue']]).T
+    return points, colors
+
 def calculate_segmentation_accuracy(coords_, predicted_labels, ground_truth_labels):
     """
     Calculate the segmentation accuracy metrics.
@@ -226,16 +284,44 @@ def calculate_segmentation_accuracy(coords_, predicted_labels, ground_truth_labe
     for i, gt_label in enumerate(unique_gt):
         for j, pred_label in enumerate(unique_pred):
             overlap_matrix[i, j] = np.sum((ground_truth_groups == gt_label) & (predicted_groups == pred_label))
+            #print(f"gt_label: {gt_label}, pred_label: {pred_label}, overlap_matrix[{i}, {j}]: {overlap_matrix[i, j]}")
     
     # Find the best match using the Hungarian algorithm
     row_ind, col_ind = linear_sum_assignment(-overlap_matrix)
     
     # Create a mapping from predicted to ground truth labels
     label_mapping = {unique_pred[col]: unique_gt[row] for row, col in zip(row_ind, col_ind)}
+
+    # Debug statements
+    #print("Unique predicted labels:", unique_pred)
+    #print("Unique ground truth labels:", unique_gt)
+    #print("Initial label mapping:", label_mapping)
+
+    # Handle unmapped predicted labels
+    remaining_pred_labels = set(unique_pred) - set(label_mapping.keys())
+    
+    while remaining_pred_labels:
+        # For each remaining predicted label, find the best matching ground truth label
+        for pred_label in list(remaining_pred_labels):
+            overlaps = np.array([np.sum((predicted_groups == pred_label) & (ground_truth_groups == gt_label)) for gt_label in unique_gt])
+            best_gt_label_index = np.argmax(overlaps)
+            best_gt_label = unique_gt[best_gt_label_index]
+            
+            # Update the mapping
+            label_mapping[pred_label] = best_gt_label
+            remaining_pred_labels.remove(pred_label)
+    
+    # Print the updated label mapping
+    #print("Final label mapping:", label_mapping)
     
     # Remap predicted labels
-    remapped_predicted_groups = np.array([label_mapping[label] for label in predicted_groups])
-    
+    remapped_predicted_groups = np.array([label_mapping.get(label, -1) for label in predicted_groups])
+        
+    # Check if all predicted labels are in the mapping
+    missing_labels = [label for label in predicted_groups if label not in label_mapping]
+    if missing_labels:
+        print("Missing labels in label mapping:", missing_labels)
+        
     # Calculate overall accuracy
     overall_accuracy = accuracy_score(ground_truth_groups, remapped_predicted_groups)
     
@@ -399,3 +485,19 @@ def delete_invalid_group(group, group_feat):
     group = num_to_natural(group)
     group_feat = group_feat[indices]
     return group, group_feat
+
+def get_labels_from_colors(colors):
+    """
+    Map RGB colors to class labels.
+
+    :param colors: List of RGB colors.
+    :return: List of class labels.
+    """
+    labels = []
+    for color in colors:
+        color_tuple = tuple(color)
+        if color_tuple in nyu40_colors_to_class:
+            labels.append(nyu40_colors_to_class[color_tuple]["id"])
+        else:
+            labels.append(-1)  # Unknown label
+    return np.array(labels, dtype=np.int16)
