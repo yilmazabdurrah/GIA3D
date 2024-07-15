@@ -193,8 +193,10 @@ if __name__ == '__main__':
     # Load train/val splits
     with open('scannet-preprocess/meta_data/scannetv2_train.txt') as train_file:
         train_scenes = train_file.read().splitlines()
+        print("Train scenes: ", train_scenes)
     with open('scannet-preprocess/meta_data/scannetv2_val.txt') as val_file:
         val_scenes = val_file.read().splitlines()
+        print("Validation scenes: ", val_scenes)
 
     # Create output directories
     train_output_dir = os.path.join(config.output_root, 'train')
@@ -206,6 +208,8 @@ if __name__ == '__main__':
 
     # Load scene paths
     scene_paths = sorted(glob.glob(config.dataset_root + '/scans*/scene*'))
+
+    print("Scene paths: ", scene_paths)
 
     # Preprocess data.
     print('Processing scenes...')

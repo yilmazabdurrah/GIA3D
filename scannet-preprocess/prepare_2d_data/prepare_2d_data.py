@@ -68,9 +68,10 @@ def main():
 
     label_mapping = None
     if opt.export_label_images:
+        print("opt.label_map_file", opt.label_map_file)
         label_map = util.read_label_mapping(opt.label_map_file, label_from='id', label_to='nyu40id')
 
-    scenes = [d for d in os.listdir(opt.scannet_path) if os.path.isdir(os.path.join(opt.scannet_path, d))]
+    scenes = sorted([d for d in os.listdir(opt.scannet_path) if os.path.isdir(os.path.join(opt.scannet_path, d))])
     print('Found %d scenes' % len(scenes))
     for i in range(0,len(scenes)):
         sens_file = os.path.join(opt.scannet_path, scenes[i], scenes[i] + '.sens')
