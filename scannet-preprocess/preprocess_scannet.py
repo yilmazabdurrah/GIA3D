@@ -52,9 +52,13 @@ def point_indices_from_group(seg_indices, group, labels_pd):
     # Map the category name to id
     label_id20 = labels_pd[labels_pd['raw_category'] == label]['nyu40id']
     label_id20 = int(label_id20.iloc[0]) if len(label_id20) > 0 else 0
+    
     label_id200 = labels_pd[labels_pd['raw_category'] == label]['id']
     label_id200 = int(label_id200.iloc[0]) if len(label_id200) > 0 else 0
 
+    #print("label_id20 inside: ", label_id20)
+    #print("label_id200 inside: ", label_id200)
+    
     # Only store for the valid categories
     if label_id20 in CLASS_IDS20:
         label_id20 = CLASS_IDS20.index(label_id20)
@@ -65,6 +69,9 @@ def point_indices_from_group(seg_indices, group, labels_pd):
         label_id200 = CLASS_IDS200.index(label_id200)
     else:
         label_id200 = IGNORE_INDEX
+
+    #print("label_id20 inside 2: ", label_id20)
+    #print("label_id200 inside 2: ", label_id200)
 
     # get points, where segment indices (points labelled with segment ids) are in the group segment list
     point_idx = np.where(np.isin(seg_indices, group_segments))[0]
@@ -161,6 +168,10 @@ def handle_process(scene_path, output_path, labels_pd, train_scenes, val_scenes,
             semantic_gt200[point_idx] = label_id200
             instance_ids[point_idx] = group['id']
 
+            #print("label_id20: ", label_id20)
+            #print("label_id200: ", label_id200)
+            #print("instance_id: ", group['id'])
+
         semantic_gt20 = semantic_gt20.astype(int)
         semantic_gt200 = semantic_gt200.astype(int)
         instance_ids = instance_ids.astype(int)
@@ -193,10 +204,10 @@ if __name__ == '__main__':
     # Load train/val splits
     with open('scannet-preprocess/meta_data/scannetv2_train.txt') as train_file:
         train_scenes = train_file.read().splitlines()
-        print("Train scenes: ", train_scenes)
+        #print("Train scenes: ", train_scenes)
     with open('scannet-preprocess/meta_data/scannetv2_val.txt') as val_file:
         val_scenes = val_file.read().splitlines()
-        print("Validation scenes: ", val_scenes)
+        #print("Validation scenes: ", val_scenes)
 
     # Create output directories
     train_output_dir = os.path.join(config.output_root, 'train')

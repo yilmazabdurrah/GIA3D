@@ -4,8 +4,8 @@ Main Script
 Author: Yunhan Yang (yhyang.myron@gmail.com)
 
 Updated by
-Abdurrahman Yilmaz (ayilmaz@lincoln.ac.uk) v05
-12 Jul 2024
+Abdurrahman Yilmaz (ayilmaz@lincoln.ac.uk) v06
+22 Jul 2024
 """
 
 import os
@@ -18,6 +18,8 @@ import multiprocessing as mp
 import pointops
 import random
 import argparse
+
+import pickle
 
 from segment_anything import build_sam, SamAutomaticMaskGenerator
 from concurrent.futures import ProcessPoolExecutor
@@ -447,75 +449,101 @@ def update_groups_and_merge_dictionaries(pcd_list_, merged_graph_min):
 # Focus on this function for global mask_ID solution
 def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_size, voxelize, th, train_scenes, val_scenes, save_2dmask_path, gt_data_path):
     print(scene_name, flush=True)
+    
+    if scene_name in train_scenes:
+        scene_path = join(data_path, "train", scene_name + ".pth")
+    elif scene_name in val_scenes:
+        scene_path = join(data_path, "val", scene_name + ".pth")
+    else: 
+        scene_path = join(data_path, "test", scene_name + ".pth")
+    #data_dict = torch.load(scene_path)
+
+    #print("Available keys:", data_dict.keys())
+
     if os.path.exists(join(save_path, scene_name + ".pth")):
         return
-    
+
     # Step 1 in pipeline: SAM Generate Masks
     # Returns the names of the multi-images in the scene
+
+    step1_output_path = os.path.join(save_path, scene_name + "_step1.pkl")
+
     color_names = sorted(os.listdir(join(rgb_path, scene_name, 'color')), key=lambda a: int(os.path.basename(a).split('.')[0]))
-    
+        
     voxelize_new = Voxelize(voxel_size=args.voxel_size, mode="train", keys=("coord", "color", "group", "feature", "predicted_iou", "stability_score"))
 
-    pcd_list = []
-    pcd_list_ = []
-    for color_id, color_name in enumerate(color_names):
-        print(color_name, flush=True) # print name of the image used for mask generation
-        pcd_dict = get_pcd(scene_name, color_name, rgb_path, mask_generator, save_2dmask_path)
-        if len(pcd_dict["coord"]) == 0:
-            continue
+    # If the output of Step 1 already exists, load it
+    if os.path.exists(step1_output_path):
+        with open(step1_output_path, 'rb') as f:
+            pcd_list, pcd_list_ = pickle.load(f)
+        print("Loaded Step 1 output from file.")
 
-        viewpoint_ids = [color_id + 1] * len(pcd_dict["coord"])
-        viewpoint_names = [color_name] * len(pcd_dict["coord"])
+    else:
+        
+        pcd_list = []
+        pcd_list_ = []
+        for color_id, color_name in enumerate(color_names):
+            print(color_name, flush=True) # print name of the image used for mask generation
+            pcd_dict = get_pcd(scene_name, color_name, rgb_path, mask_generator, save_2dmask_path)
+            if len(pcd_dict["coord"]) == 0:
+                continue
 
-        pcd_dict.update(viewpoint_id=viewpoint_ids, viewpoint_name=viewpoint_names)
+            viewpoint_ids = [color_id + 1] * len(pcd_dict["coord"])
+            viewpoint_names = [color_name] * len(pcd_dict["coord"])
 
-        '''if verbose:
-            # Extract data from tvoxelizedhe dictionary
-            coords = pcd_dict['coord']
-            colors = pcd_dict['color']
-            group_ids = pcd_dict['group']
-            #viewpoint_name = pcd_dict['viewpoint_name']
-            viewpoint_ids = pcd_dict['viewpoint_id']
-            stability_scores = pcd_dict['stability_score']
-            predicted_ious = pcd_dict['predicted_iou']
-            features = pcd_dict['feature']
+            pcd_dict.update(viewpoint_id=viewpoint_ids, viewpoint_name=viewpoint_names)
 
-            # Print the header
-            print(f"{'Viewpoint ID':<10} {'Coord':<65} {'Color':<20} {'Group ID':<10} {'Stability Score':<20} {'Prediction IOU':<20} {'Feature':<40}")
+            '''if verbose:
+                # Extract data from tvoxelizedhe dictionary
+                coords = pcd_dict['coord']
+                colors = pcd_dict['color']
+                group_ids = pcd_dict['group']
+                #viewpoint_name = pcd_dict['viewpoint_name']
+                viewpoint_ids = pcd_dict['viewpoint_id']
+                stability_scores = pcd_dict['stability_score']
+                predicted_ious = pcd_dict['predicted_iou']
+                features = pcd_dict['feature']
 
-            for viewpoint_id, coord, color, group_id, stability_score, predicted_iou, feature in zip(viewpoint_ids, coords, colors, group_ids, stability_scores, predicted_ious, features):
-                coord_str = ', '.join(map(str, coord))
-                color_str = ', '.join(map(str, color))
-                feature_str = ', '.join(map(str, feature))
-                #if group_id == -1:
-                print(f"{viewpoint_id:<10} {coord_str:<65} {color_str:<20} {group_id:<10} {stability_score:<20} {predicted_iou:<20} {feature_str:<40}")'''
+                # Print the header
+                print(f"{'Viewpoint ID':<10} {'Coord':<65} {'Color':<20} {'Group ID':<10} {'Stability Score':<20} {'Prediction IOU':<20} {'Feature':<40}")
 
-        pcd_dict_ = voxelize_new(pcd_dict)
-        pcd_dict = voxelize(pcd_dict)
+                for viewpoint_id, coord, color, group_id, stability_score, predicted_iou, feature in zip(viewpoint_ids, coords, colors, group_ids, stability_scores, predicted_ious, features):
+                    coord_str = ', '.join(map(str, coord))
+                    color_str = ', '.join(map(str, color))
+                    feature_str = ', '.join(map(str, feature))
+                    #if group_id == -1:
+                    print(f"{viewpoint_id:<10} {coord_str:<65} {color_str:<20} {group_id:<10} {stability_score:<20} {predicted_iou:<20} {feature_str:<40}")'''
 
-        if verbose:
-            # Extract data from the dictionary
-            coords = pcd_dict_['coord']
-            colors = pcd_dict_['color']
-            group_ids = pcd_dict_['group']
-            #viewpoint_name = pcd_dict['viewpoint_name']
-            viewpoint_ids = pcd_dict_['viewpoint_id']
-            stability_scores = pcd_dict_['stability_score']
-            predicted_ious = pcd_dict_['predicted_iou']
-            features = pcd_dict_['feature'] 
+            pcd_dict_ = voxelize_new(pcd_dict)
+            pcd_dict = voxelize(pcd_dict)
 
-            # Print the header
-            print(f"{'Viewpoint ID':<10} {'Coord':<65} {'Color':<20} {'Group ID':<10} {'Stability Score':<20} {'Prediction IOU':<20} {'Feature':<40}")
+            if verbose:
+                # Extract data from the dictionary
+                coords = pcd_dict_['coord']
+                colors = pcd_dict_['color']
+                group_ids = pcd_dict_['group']
+                #viewpoint_name = pcd_dict['viewpoint_name']
+                viewpoint_ids = pcd_dict_['viewpoint_id']
+                stability_scores = pcd_dict_['stability_score']
+                predicted_ious = pcd_dict_['predicted_iou']
+                features = pcd_dict_['feature'] 
 
-            for viewpoint_id, coord, color, group_id, stability_score, predicted_iou, feature in zip(viewpoint_ids, coords, colors, group_ids, stability_scores, predicted_ious, features):
-                coord_str = ', '.join(map(str, coord))
-                color_str = ', '.join(map(str, color))
-                feature_str = ', '.join(map(str, feature))
-                #if group_id == -1:
-                print(f"{viewpoint_id:<10} {coord_str:<65} {color_str:<20} {group_id:<10} {stability_score:<20} {predicted_iou:<20} {feature_str:<40}")
+                # Print the header
+                print(f"{'Viewpoint ID':<10} {'Coord':<65} {'Color':<20} {'Group ID':<10} {'Stability Score':<20} {'Prediction IOU':<20} {'Feature':<40}")
 
-        pcd_list.append(pcd_dict)
-        pcd_list_.append(pcd_dict_)
+                for viewpoint_id, coord, color, group_id, stability_score, predicted_iou, feature in zip(viewpoint_ids, coords, colors, group_ids, stability_scores, predicted_ious, features):
+                    coord_str = ', '.join(map(str, coord))
+                    color_str = ', '.join(map(str, color))
+                    feature_str = ', '.join(map(str, feature))
+                    #if group_id == -1:
+                    print(f"{viewpoint_id:<10} {coord_str:<65} {color_str:<20} {group_id:<10} {stability_score:<20} {predicted_iou:<20} {feature_str:<40}")
+
+            pcd_list.append(pcd_dict)
+            pcd_list_.append(pcd_dict_)
+        # Save the output of Step 1 to a file for future use
+        with open(step1_output_path, 'wb') as f:
+            pickle.dump((pcd_list, pcd_list_), f)
+        print("Saved Step 1 output to a file.")
     
     # Step 2 in pipeline: Merge Two Adjacent Pointclouds until get single point cloud
     while len(pcd_list) != 1:
@@ -657,19 +685,78 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
         group[mask_dis] = -1
         group = group.astype(np.int16)
         if i == 0:
-            torch.save(num_to_natural(group), join(save_path, scene_name + ".pth"))
+            #torch.save(num_to_natural(group), join(save_path, scene_name + ".pth"))
             labels = np.array(group)
-            coord_ = data_dict["coord"]
+            coord_ = data_dict.get("coord", None)
         elif i == 1:
-            torch.save(num_to_natural(group), join(save_path, scene_name + "_new" + ".pth"))
+            #torch.save(num_to_natural(group), join(save_path, scene_name + "_new" + ".pth"))
             labels_new = np.array(group)
         else: 
-            torch.save(num_to_natural(group), join(save_path, scene_name + ".pth"))
+            #torch.save(num_to_natural(group), join(save_path, scene_name + ".pth"))
             labels = np.array(group)
 
     # Comparisons
 
-    # Get GT data for the scene
+    # Get GT data for the scene from dictionary
+
+    # Access the ground truth labels
+    semantic_gt20 = data_dict.get("semantic_gt20", None)
+    semantic_gt200 = data_dict.get("semantic_gt200", None)
+    instance_gt = data_dict.get("instance_gt", None)
+
+    nyu40class_mapping = {value["id"]: value["name"] for key, value in nyu40_colors_to_class.items()}
+    nyu40class_list = list(nyu40class_mapping.items())
+
+    ScanNet20class_mapping = {value["id"]: value["name"] for key, value in ScanNet20_colors_to_class.items()}
+    ScanNet20class_list = list(ScanNet20class_mapping.items())
+
+    ScanNet200class_mapping = {value["id"]: value["name"] for key, value in ScanNet200_colors_to_class.items()}
+    ScanNet200class_list = list(ScanNet200class_mapping.items())
+    
+    for class_id, class_name in nyu40class_mapping.items():
+        print(f"ID: {class_id}, Class: {class_name}")
+    
+    for class_id, class_name in ScanNet200class_mapping.items():
+        print(f"ID: {class_id}, Class: {class_name}")
+
+    # Check if the labels exist and print their shapes
+    if semantic_gt20 is not None:
+        #print(f'semantic_gt20 shape: {semantic_gt20.shape}')
+        unique_labels20 = set(semantic_gt20)
+        #unique_labels20 = {label + 1 for label in set(semantic_gt20)}
+        print(f"Unique labels20: {unique_labels20}")
+        for label in unique_labels20:
+            if label < 0 or label >= len(ScanNet20class_list):
+                print(f"Label {label}: {ScanNet20class_mapping.get(label, 'Unknown')}")
+            else: 
+                label, name = ScanNet20class_list[label]
+                print(f"Label {label}: {ScanNet20class_mapping.get(label, 'Unknown')}")
+    else:
+        print('semantic_gt20 not found in the data_dict')
+
+    if semantic_gt200 is not None:
+        #print(f'semantic_gt200 shape: {semantic_gt200.shape}')
+        unique_labels200 = set(semantic_gt200)
+        #unique_labels200 = {label + 1 for label in set(semantic_gt200)}
+        print(f"Unique labels200: {unique_labels200}")
+        #print(list(ScanNet200class_mapping)[0])
+        for label in unique_labels200:
+            if label < 0 or label >= len(ScanNet200class_list):
+                print(f"Label {label}: {ScanNet200class_mapping.get(label, 'Unknown')}")
+            else:
+                label, name = ScanNet200class_list[label]
+                print(f"Label {label}: {ScanNet200class_mapping.get(label, 'Unknown')}")
+    else:
+        print('semantic_gt200 not found in the data_dict')
+
+    if instance_gt is not None:
+        #print(f'instance_gt shape: {instance_gt.shape}')
+        unique_instances = set(instance_gt)
+        print(f"Unique instances: {unique_instances}")
+    else:
+        print('instance_gt not found in the data_dict')
+
+    # Get GT data for the scene nyu40class
 
     if os.path.exists(join(gt_data_path, scene_name, scene_name + "_vh_clean_2.labels.ply")):
         print(f"Ground truth data exists for {scene_name}")
@@ -680,7 +767,8 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
         
         data_dict = {
             "coord": points_gt,
-            "labels": labels_gt
+            "labels": labels_gt,
+            "colors": colors_gt
         }
         torch.save(data_dict, join(save_path, scene_name + "_gt.pth"))
 
