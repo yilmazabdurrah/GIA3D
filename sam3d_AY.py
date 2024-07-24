@@ -296,19 +296,22 @@ def cal_graph(input_dict, new_input_dict, match_inds, coefficients=[0.25, 0.25, 
         correspondence_graph.add_node(node)
 
     # Add edges based on group_overlap
-    for (group_i, view_id_i, view_name_i, point_cnt_group_i, group_j, view_id_j, view_name_j, point_cnt_group_j), count in group_overlap.items():
-        cost[(group_i, view_id_i, view_name_i, point_cnt_group_i, group_j, view_id_j, view_name_j, point_cnt_group_j)] /= count
-        cost[(group_i, view_id_i, view_name_i, point_cnt_group_i, group_j, view_id_j, view_name_j, point_cnt_group_j)] += L4*max(0,(1 - count/min(point_cnt_group_i,point_cnt_group_j)))
+    #print(f"length of group overlap: {len(group_overlap.items())}")
+    for key, count in group_overlap.items():
+        group_i, view_id_i, view_name_i, point_cnt_group_i, group_j, view_id_j, view_name_j, point_cnt_group_j = key
+        cost[key] /= count
+        cost[key] += L4*max(0,(1 - count/min(point_cnt_group_i,point_cnt_group_j)))
         #cost[(group_i, view_id_i, view_name_i, point_cnt_group_i, group_j, view_id_j, view_name_j, point_cnt_group_j)] /= 4 # divide the number of components in cost function
         correspondence_graph.add_edge(
                 (view_name_i, group_i), 
                 (view_name_j, group_j), 
                 count_common=count,
                 count_total=[point_cnt_group_i,point_cnt_group_j],
-                cost = cost[(group_i, view_id_i, view_name_i, point_cnt_group_i, group_j, view_id_j, view_name_j, point_cnt_group_j)],
+                cost = cost[key],
                 viewpoint_id_0=view_id_j, 
                 viewpoint_id_1=view_id_i
             )
+        #print(f"key: {key} and count: {count}")
 
     return correspondence_graph, input_dict, new_input_dict
 
@@ -571,7 +574,9 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
             pcd_list_[index]["group"] = group_index
 
         merged_graph = nx.DiGraph()
+        #print(f"Number of scenes: {len(pcd_list_)}")
         for indice in range(len(pcd_list_)):
+            #print(f"Current indice: {indice}")
             corr_graph, pcd_list_ = cal_scenes(pcd_list_, indice, voxel_size=voxel_size, voxelize=voxelize_new) 
             if len(corr_graph.nodes) > 0 and len(corr_graph.edges) > 0:
                 merged_graph = nx.compose(merged_graph, corr_graph)

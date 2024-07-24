@@ -197,12 +197,7 @@ def normalized_feature_difference(f_i, f_j):
     return normalized_difference
 
 # Mask ID correspondence between all frames
-def cal_graph(input_dict, new_input_dict, match_inds, coefficients=[0.25, 0.25, 0.25, 0.25]):
-
-    L1 = coefficients[0]
-    L2 = coefficients[0]
-    L3 = coefficients[0]
-    L4 = coefficients[0]
+def cal_graph(input_dict, new_input_dict, match_inds, coefficient_combinations=[[0.25, 0.25, 0.25, 0.25]]):
 
     group_0 = input_dict["group"]
     group_1 = new_input_dict["group"]
@@ -213,9 +208,6 @@ def cal_graph(input_dict, new_input_dict, match_inds, coefficients=[0.25, 0.25, 
     view_names_0 = input_dict["viewpoint_name"]
     view_names_1 = new_input_dict["viewpoint_name"]
 
-    unique_nodes_0 = list(set(zip(view_names_0, group_0)))
-    unique_nodes_1 = list(set(zip(view_names_1, group_1)))
-
     features_0 = input_dict["feature"]
     features_1 = new_input_dict["feature"]
     stability_scores_0 = input_dict["stability_score"]
@@ -223,12 +215,21 @@ def cal_graph(input_dict, new_input_dict, match_inds, coefficients=[0.25, 0.25, 
     predicted_ious_0 = input_dict["predicted_iou"]
     predicted_ious_1 = new_input_dict["predicted_iou"]
 
+    unique_nodes_0 = list(set(zip(view_names_0, group_0)))
+    unique_nodes_1 = list(set(zip(view_names_1, group_1)))
+
+    # Initialize the graph
+    correspondence_graph = nx.DiGraph()   
+
+    for node in unique_nodes_0:
+        correspondence_graph.add_node(node)
+    for node in unique_nodes_1:
+        correspondence_graph.add_node(node)
+
     # Calculate the group number correspondence of overlapping points
-    group_overlap = {}
     point_cnt_group_0 = {}
     point_cnt_group_1 = {}
-    cost = {}
-
+    
     unique_values_group_0 = set(group_0)
 
     for unique_value in unique_values_group_0:
@@ -241,6 +242,9 @@ def cal_graph(input_dict, new_input_dict, match_inds, coefficients=[0.25, 0.25, 
 
     #print("Counts for group 0 ", point_cnt_group_0)
     #print("Counts for group 1 ", point_cnt_group_1)
+
+    cost = {}
+    group_overlap = {}
 
     for i, j in match_inds:
         group_i = group_1[i]
@@ -278,43 +282,48 @@ def cal_graph(input_dict, new_input_dict, match_inds, coefficients=[0.25, 0.25, 
         #print("overlap_key: ", overlap_key, " and features: ", feature_i, feature_j)
         if overlap_key not in group_overlap:
             group_overlap[overlap_key] = 0
-            cost[overlap_key] = 0
+            cost[overlap_key] = {tuple(coefficients): 0 for coefficients in coefficient_combinations}
         group_overlap[overlap_key] += 1
         '''if group_i == -1 and group_j == -1:
             cost[overlap_key] += 3
         elif group_i == -1 or group_j == -1:
             continue
         else:'''
-        cost[overlap_key] += L1*normalized_feature_difference(feature_i,feature_j) + L2*abs(stability_score_i - stability_score_j) + L3*abs(predicted_iou_i - predicted_iou_j)
+
+        for coefficients in coefficient_combinations:
+            L1, L2, L3, L4 = coefficients
+
+            cost[overlap_key][tuple(coefficients)] += L1*normalized_feature_difference(feature_i,feature_j) + L2*abs(stability_score_i - stability_score_j) + L3*abs(predicted_iou_i - predicted_iou_j)
 
     #print("cost: ", cost)
 
-    # Initialize the graph
-    correspondence_graph = nx.DiGraph()   
+    # Add edges with costs for all coefficient combinations
+    #print(f"length of group overlap: {len(group_overlap.items())}")
+    for key, count in group_overlap.items():
+        group_i, view_id_i, view_name_i, point_cnt_group_i, group_j, view_id_j, view_name_j, point_cnt_group_j = key
+        edge_data = {
+            'count_common': count,
+            'count_total': [point_cnt_group_i, point_cnt_group_j],
+            'viewpoint_id_0': view_id_j,
+            'viewpoint_id_1': view_id_i,
+            'cost': {}
+        }
 
-    for node in unique_nodes_0:
-        correspondence_graph.add_node(node)
-    for node in unique_nodes_1:
-        correspondence_graph.add_node(node)
+        for coefficients in coefficient_combinations:
+            L1, L2, L3, L4 = coefficients
+            cost_value = cost[key][tuple(coefficients)] / count + L4 * max(0, (1 - count / min(point_cnt_group_i, point_cnt_group_j)))
+            edge_data['cost'][tuple(coefficients)] = cost_value
 
-    # Add edges based on group_overlap
-    for (group_i, view_id_i, view_name_i, point_cnt_group_i, group_j, view_id_j, view_name_j, point_cnt_group_j), count in group_overlap.items():
-        cost[(group_i, view_id_i, view_name_i, point_cnt_group_i, group_j, view_id_j, view_name_j, point_cnt_group_j)] /= count
-        cost[(group_i, view_id_i, view_name_i, point_cnt_group_i, group_j, view_id_j, view_name_j, point_cnt_group_j)] += L4*max(0,(1 - count/min(point_cnt_group_i,point_cnt_group_j)))
-        #cost[(group_i, view_id_i, view_name_i, point_cnt_group_i, group_j, view_id_j, view_name_j, point_cnt_group_j)] /= 4 # divide the number of components in cost function
         correspondence_graph.add_edge(
-                (view_name_i, group_i), 
-                (view_name_j, group_j), 
-                count_common=count,
-                count_total=[point_cnt_group_i,point_cnt_group_j],
-                cost = cost[(group_i, view_id_i, view_name_i, point_cnt_group_i, group_j, view_id_j, view_name_j, point_cnt_group_j)],
-                viewpoint_id_0=view_id_j, 
-                viewpoint_id_1=view_id_i
-            )
+            (view_name_i, group_i), 
+            (view_name_j, group_j), 
+            **edge_data
+        )
+        #print(f"key: {key} and count: {count}")
 
     return correspondence_graph, input_dict, new_input_dict
 
-def cal_scenes(pcd_list, index, voxel_size, voxelize, th=50, coefficients=[0.25, 0.25, 0.25, 0.25]):
+def cal_scenes(pcd_list, index, voxel_size, voxelize, th=50, coefficient_combinations=[[0.25, 0.25, 0.25, 0.25]]):
     #print(index, flush=True)
     input_dict_0 = pcd_list[index]
     input_dict_1 = {}
@@ -337,7 +346,7 @@ def cal_scenes(pcd_list, index, voxel_size, voxelize, th=50, coefficients=[0.25,
             # Cal Dul-overlap
             match_inds = get_matching_indices(pcd1, pcd0, 1.5 * voxel_size, 1)
             if match_inds:
-                correspondence_graph, input_dict_0, input_dict_1 = cal_graph(input_dict_0, input_dict_1, match_inds, coefficients)
+                correspondence_graph, input_dict_0, input_dict_1 = cal_graph(input_dict_0, input_dict_1, match_inds, coefficient_combinations)
                 pcd_list[i].update(input_dict_1)
                 pcd_list[index].update(input_dict_0)
                 if len(correspondence_graph.nodes) > 0 and len(correspondence_graph.edges) > 0:
@@ -572,20 +581,20 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
             group_index[group_index != -1] += group_index_last.max() + 1
             pcd_list_[index]["group"] = group_index
 
-        step_size = 0.1
+        step_size = 0.5
         coefficients_range = np.arange(0, 1.1, step_size)
-        
-        # Generate all possible combinations of lambda values
-        for combination in itertools.product(coefficients_range, repeat=4):
-            if sum(combination) == 1:
-                coefficients = list(combination)
-                #print("coefficients: ", coefficients) # 258 combinations we have
 
-        # ADD ITERATION HERE TO SEE THE RESULT FOR EACH COMBINATION
+        # Generate all possible combinations of lambda values and filter those that sum to 1
+        valid_combinations = [list(combination) for combination in itertools.product(coefficients_range, repeat=4) if sum(combination) == 1]
+        valid_combinations = [[0.25, 0.25, 0.25, 0.25]] + valid_combinations
+
+        print(f"Number of valid combinations: {len(valid_combinations)}")
 
         merged_graph = nx.DiGraph()
+        print(f"Number of scenes: {len(pcd_list_)}")
         for indice in range(len(pcd_list_)):
-            corr_graph, pcd_list_ = cal_scenes(pcd_list_, indice, voxel_size=voxel_size, voxelize=voxelize_new, coefficients=coefficients) 
+            print(f"Current indice: {indice}")
+            corr_graph, pcd_list_ = cal_scenes(pcd_list_, indice, voxel_size=voxel_size, voxelize=voxelize_new, coefficient_combinations=valid_combinations) 
             if len(corr_graph.nodes) > 0 and len(corr_graph.edges) > 0:
                 merged_graph = nx.compose(merged_graph, corr_graph)
                 #print(corr_graph.edges(data=True))
@@ -599,49 +608,93 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
         large_value = 1e9  # Define a large value to replace infinity
         cost_matrix = np.full((len(node_list), len(node_list)), large_value)
 
-        for u, v, data in merged_graph.edges(data=True):
-            i, j = node_index[u], node_index[v]
-            cost_matrix[i, j] = data['cost']
-            cost_matrix[j, i] = data['cost'] 
+        # Prepare to store merged graphs for each coefficient combination
+        merged_graphs = {}
 
-        # Convert the cost matrix to a condensed distance matrix for hierarchical clustering
-        np.fill_diagonal(cost_matrix, 0)
-        condensed_cost_matrix = squareform(cost_matrix)
-    
-        # Perform hierarchical clustering
-        Z = linkage(condensed_cost_matrix, method='average')
+        # Iterate over each coefficient combination
+        for coefficients in valid_combinations:
 
-        # Set a threshold to determine clusters (tune this threshold based on the data)
-        threshold = 0.2
-        clusters = fcluster(Z, t=threshold, criterion='distance')
+            # Initialize the cost matrix for this coefficient combination
+            cost_matrix = np.full((len(node_list), len(node_list)), large_value)
 
-        node_to_cluster = {node: cluster for node, cluster in zip(node_list, clusters)}
+            # Create a dictionary to accumulate costs for each edge and each coefficient combination
+            edge_costs = {(u, v): large_value for u, v in merged_graph.edges()}
 
-        # Create a mapping of merged nodes
-        merged_nodes = {}
-        for cluster in set(clusters):
-            cluster_nodes = [node for node, c in node_to_cluster.items() if c == cluster]
-            representative = cluster_nodes[0]
-            for node in cluster_nodes:
-                if node != representative:
-                    merged_nodes[node] = representative
+            # Accumulate costs for this coefficient combination
+            for u, v, data in merged_graph.edges(data=True):
+                cost_value = data['cost'].get(tuple(coefficients), large_value)
+                edge_costs[(u, v)] = cost_value
+                edge_costs[(v, u)] = cost_value  # Since it's undirected, the cost is the same in both directions
 
-        # Merge clusters and update the graph
-        merged_graph_min = nx.DiGraph()
+            # Fill the cost matrix
+            for (u, v), cost_value in edge_costs.items():
+                i, j = node_index[u], node_index[v]
+                cost_matrix[i, j] = cost_value
+                cost_matrix[j, i] = cost_value
 
-        # Add representative nodes to the new graph
-        for cluster in set(clusters):
-            cluster_nodes = [node for node, c in node_to_cluster.items() if c == cluster]
-            representative = cluster_nodes[0]
-            merged_graph_min.add_node(representative)
+            # Convert the cost matrix to a condensed distance matrix for hierarchical clustering
+            np.fill_diagonal(cost_matrix, 0)
+            condensed_cost_matrix = squareform(cost_matrix)
 
-        # Add edges to the new graph only between the representative nodes
-        for u, v, data in merged_graph.edges(data=True):
-            v_pos = merged_nodes.get(u)
+            # Perform hierarchical clustering
+            Z = linkage(condensed_cost_matrix, method='average')
 
-            if v_pos is not None and v_pos == v:
-                if not merged_graph_min.has_edge(u, v):
-                    merged_graph_min.add_edge(u, v, **data)
+            # Set a threshold to determine clusters (tune this threshold based on the data)
+            threshold = 0.2
+            clusters = fcluster(Z, t=threshold, criterion='distance')
+
+            node_to_cluster = {node: cluster for node, cluster in zip(node_list, clusters)}
+
+            # Create a mapping of merged nodes
+            merged_nodes = {}
+            for cluster in set(clusters):
+                cluster_nodes = [node for node, c in node_to_cluster.items() if c == cluster]
+                representative = cluster_nodes[0]
+                for node in cluster_nodes:
+                    if node != representative:
+                        merged_nodes[node] = representative
+
+            # Merge clusters and update the graph
+            merged_graph_min = nx.DiGraph()
+
+            # Add representative nodes to the new graph
+            for cluster in set(clusters):
+                cluster_nodes = [node for node, c in node_to_cluster.items() if c == cluster]
+                representative = cluster_nodes[0]
+                merged_graph_min.add_node(representative)
+
+            # Add edges to the new graph only between the representative nodes
+            for u, v, data in merged_graph.edges(data=True):
+                v_pos = merged_nodes.get(u)
+                w_pos = merged_nodes.get(v)
+
+                if v_pos is not None and w_pos is not None and v_pos != w_pos:
+                    if not merged_graph_min.has_edge(v_pos, w_pos):
+                        # Use the cost value for this coefficient combination
+                        edge_data = {
+                            'count_common': data['count_common'],
+                            'count_total': data['count_total'],
+                            'cost': data['cost'].get(tuple(coefficients), large_value),
+                            'viewpoint_id_0': data['viewpoint_id_0'],
+                            'viewpoint_id_1': data['viewpoint_id_1']
+                        }
+                        merged_graph_min.add_edge(v_pos, w_pos, **edge_data)
+
+            # Store the result for this coefficient combination
+            merged_graphs[tuple(coefficients)] = merged_graph_min
+
+            for coefficients, graph in merged_graphs.items():
+                print(f"\nMerged graph for coefficients {coefficients}:")
+                
+                # Print nodes
+                print("Nodes:")
+                for node in graph.nodes(data=True):
+                    print(node)
+                
+                # Print edges
+                print("Edges:")
+                for edge in graph.edges(data=True):
+                    print(edge)
 
         # # Print nodes and edges of the new graph
         # print("Nodes in the minimized graph:")
