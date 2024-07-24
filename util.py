@@ -7,7 +7,7 @@ from PIL import Image
 import json
 # import clip
 import pointops
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, confusion_matrix, precision_score, recall_score, f1_score
 from scipy.optimize import linear_sum_assignment
 
 import matplotlib.pyplot as plt
@@ -486,87 +486,6 @@ def load_ply(file_path):
     colors = np.vstack([vertex_data['red'], vertex_data['green'], vertex_data['blue']]).T
     return points, colors
 
-def calculate_segmentation_accuracy(coords_, predicted_labels, ground_truth_labels):
-    """
-    Calculate the segmentation accuracy metrics.
-    
-    Parameters:
-        coords_ (np.ndarray): Coordinates of the points (not used in accuracy calculation).
-        predicted_labels (np.ndarray): Predicted group labels.
-        ground_truth_labels (np.ndarray): Ground truth group labels.
-    
-    Returns:
-        dict: Dictionary containing overall accuracy and instance-wise accuracy.
-    """
-    
-    # Flatten the group arrays
-    predicted_groups = predicted_labels.flatten()
-    ground_truth_groups = ground_truth_labels.flatten()
-
-    # Calculate the overlap matrix
-    unique_pred = np.unique(predicted_groups)
-    unique_gt = np.unique(ground_truth_groups)
-    
-    overlap_matrix = np.zeros((len(unique_gt), len(unique_pred)), dtype=int)
-    
-    for i, gt_label in enumerate(unique_gt):
-        for j, pred_label in enumerate(unique_pred):
-            overlap_matrix[i, j] = np.sum((ground_truth_groups == gt_label) & (predicted_groups == pred_label))
-            #print(f"gt_label: {gt_label}, pred_label: {pred_label}, overlap_matrix[{i}, {j}]: {overlap_matrix[i, j]}")
-    
-    # Find the best match using the Hungarian algorithm
-    row_ind, col_ind = linear_sum_assignment(-overlap_matrix)
-    
-    # Create a mapping from predicted to ground truth labels
-    label_mapping = {unique_pred[col]: unique_gt[row] for row, col in zip(row_ind, col_ind)}
-
-    # Debug statements
-    #print("Unique predicted labels:", unique_pred)
-    #print("Unique ground truth labels:", unique_gt)
-    #print("Initial label mapping:", label_mapping)
-
-    # Handle unmapped predicted labels
-    remaining_pred_labels = set(unique_pred) - set(label_mapping.keys())
-    
-    while remaining_pred_labels:
-        # For each remaining predicted label, find the best matching ground truth label
-        for pred_label in list(remaining_pred_labels):
-            overlaps = np.array([np.sum((predicted_groups == pred_label) & (ground_truth_groups == gt_label)) for gt_label in unique_gt])
-            best_gt_label_index = np.argmax(overlaps)
-            best_gt_label = unique_gt[best_gt_label_index]
-            
-            # Update the mapping
-            label_mapping[pred_label] = best_gt_label
-            remaining_pred_labels.remove(pred_label)
-    
-    # Print the updated label mapping
-    #print("Final label mapping:", label_mapping)
-    
-    # Remap predicted labels
-    remapped_predicted_groups = np.array([label_mapping.get(label, -1) for label in predicted_groups])
-        
-    # Check if all predicted labels are in the mapping
-    missing_labels = [label for label in predicted_groups if label not in label_mapping]
-    if missing_labels:
-        print("Missing labels in label mapping:", missing_labels)
-        
-    # Calculate overall accuracy
-    overall_accuracy = accuracy_score(ground_truth_groups, remapped_predicted_groups)
-    
-    # Calculate instance-wise accuracy
-    instance_accuracy = {}
-    for instance in unique_gt:
-        instance_mask = (ground_truth_groups == instance)
-        instance_accuracy[instance] = accuracy_score(
-            ground_truth_groups[instance_mask],
-            remapped_predicted_groups[instance_mask]
-        )
-    
-    return {
-        "overall_accuracy": overall_accuracy,
-        "instance_accuracy": instance_accuracy
-    }
-
 def to_numpy(x):
     if isinstance(x, torch.Tensor):
         x = x.clone().detach().cpu().numpy()
@@ -729,3 +648,238 @@ def get_labels_from_colors(colors):
         else:
             labels.append(-1)  # Unknown label
     return np.array(labels, dtype=np.int16)
+
+############################# Evaluation Metrics #########################################################
+
+## Accuracy Score
+# How to call: accuracy_metrics = calculate_segmentation_accuracy(labels, labels_gt)
+def calculate_segmentation_accuracy(predicted_labels, ground_truth_labels):
+    """
+    Calculate the segmentation accuracy metrics.
+    
+    Parameters:
+        predicted_labels (np.ndarray): Predicted group labels.
+        ground_truth_labels (np.ndarray): Ground truth group labels.
+    
+    Returns:
+        dict: Dictionary containing overall accuracy and instance-wise accuracy.
+    """
+    
+    # Flatten the group arrays
+    predicted_groups = predicted_labels.flatten()
+    ground_truth_groups = ground_truth_labels.flatten()
+
+    # Calculate the overlap matrix
+    unique_pred = np.unique(predicted_groups)
+    unique_gt = np.unique(ground_truth_groups)
+    
+    overlap_matrix = np.zeros((len(unique_gt), len(unique_pred)), dtype=int)
+    
+    for i, gt_label in enumerate(unique_gt):
+        for j, pred_label in enumerate(unique_pred):
+            overlap_matrix[i, j] = np.sum((ground_truth_groups == gt_label) & (predicted_groups == pred_label))
+            #print(f"gt_label: {gt_label}, pred_label: {pred_label}, overlap_matrix[{i}, {j}]: {overlap_matrix[i, j]}")
+    
+    # Find the best match using the Hungarian algorithm
+    row_ind, col_ind = linear_sum_assignment(-overlap_matrix)
+    
+    # Create a mapping from predicted to ground truth labels
+    label_mapping = {unique_pred[col]: unique_gt[row] for row, col in zip(row_ind, col_ind)}
+
+    # Debug statements
+    #print("Unique predicted labels:", unique_pred)
+    #print("Unique ground truth labels:", unique_gt)
+    #print("Initial label mapping:", label_mapping)
+
+    # Handle unmapped predicted labels
+    remaining_pred_labels = set(unique_pred) - set(label_mapping.keys())
+    
+    while remaining_pred_labels:
+        # For each remaining predicted label, find the best matching ground truth label
+        for pred_label in list(remaining_pred_labels):
+            overlaps = np.array([np.sum((predicted_groups == pred_label) & (ground_truth_groups == gt_label)) for gt_label in unique_gt])
+            best_gt_label_index = np.argmax(overlaps)
+            best_gt_label = unique_gt[best_gt_label_index]
+            
+            # Update the mapping
+            label_mapping[pred_label] = best_gt_label
+            remaining_pred_labels.remove(pred_label)
+    
+    # Print the updated label mapping
+    #print("Final label mapping:", label_mapping)
+    
+    # Remap predicted labels
+    remapped_predicted_groups = np.array([label_mapping.get(label, -1) for label in predicted_groups])
+        
+    # Check if all predicted labels are in the mapping
+    missing_labels = [label for label in predicted_groups if label not in label_mapping]
+    if missing_labels:
+        print("Missing labels in label mapping:", missing_labels)
+        
+    # Calculate overall accuracy
+    overall_accuracy = accuracy_score(ground_truth_groups, remapped_predicted_groups)
+    
+    # Calculate instance-wise accuracy
+    instance_accuracy = {}
+    for instance in unique_gt:
+        instance_mask = (ground_truth_groups == instance)
+        instance_accuracy[instance] = accuracy_score(
+            ground_truth_groups[instance_mask],
+            remapped_predicted_groups[instance_mask]
+        )
+    
+    return {
+        "overall_accuracy": overall_accuracy,
+        "instance_accuracy": instance_accuracy
+    }
+
+def calculate_segmentation_accuracy_iou(predicted_labels, ground_truth_labels):
+    """
+    Calculate the segmentation accuracy metrics based on IoU.
+    
+    Parameters:
+        predicted_labels (np.ndarray): Predicted group labels.
+        ground_truth_labels (np.ndarray): Ground truth group labels.
+    
+    Returns:
+        dict: Dictionary containing overall accuracy and instance-wise accuracy.
+    """
+    
+    # Flatten the group arrays
+    predicted_groups = predicted_labels.flatten()
+    ground_truth_groups = ground_truth_labels.flatten()
+
+    # Get unique labels
+    unique_pred = np.unique(predicted_groups)
+    unique_gt = np.unique(ground_truth_groups)
+    
+    # Calculate the IoU matrix
+    iou_matrix = np.zeros((len(unique_gt), len(unique_pred)))
+    
+    for i, gt_label in enumerate(unique_gt):
+        gt_mask = (ground_truth_groups == gt_label)
+        for j, pred_label in enumerate(unique_pred):
+            pred_mask = (predicted_groups == pred_label)
+            iou_matrix[i, j] = calculate_iou(pred_mask, gt_mask)
+    
+    # Find the best match using the Hungarian algorithm
+    row_ind, col_ind = linear_sum_assignment(-iou_matrix)
+    
+    # Create a mapping from predicted to ground truth labels
+    label_mapping = {unique_pred[col]: unique_gt[row] for row, col in zip(row_ind, col_ind)}
+
+    # Handle unmapped predicted labels
+    remaining_pred_labels = set(unique_pred) - set(label_mapping.keys())
+    
+    while remaining_pred_labels:
+        for pred_label in list(remaining_pred_labels):
+            pred_mask = (predicted_groups == pred_label)
+            overlaps = np.array([calculate_iou(pred_mask, (ground_truth_groups == gt_label)) for gt_label in unique_gt])
+            best_gt_label_index = np.argmax(overlaps)
+            best_gt_label = unique_gt[best_gt_label_index]
+            
+            # Update the mapping
+            label_mapping[pred_label] = best_gt_label
+            remaining_pred_labels.remove(pred_label)
+    
+    # Remap predicted labels
+    remapped_predicted_groups = np.array([label_mapping.get(label, -1) for label in predicted_groups])
+        
+    # Check if all predicted labels are in the mapping
+    missing_labels = [label for label in predicted_groups if label not in label_mapping]
+    if missing_labels:
+        print("Missing labels in label mapping:", missing_labels)
+        
+    # Calculate overall accuracy
+    overall_accuracy = accuracy_score(ground_truth_groups, remapped_predicted_groups)
+    
+    # Calculate instance-wise accuracy
+    instance_accuracy = {}
+    for instance in unique_gt:
+        instance_mask = (ground_truth_groups == instance)
+        instance_accuracy[instance] = accuracy_score(
+            ground_truth_groups[instance_mask],
+            remapped_predicted_groups[instance_mask]
+        )
+    
+    return {
+        "overall_accuracy": overall_accuracy,
+        "instance_accuracy": instance_accuracy
+    }
+
+def calculate_iou(predicted_mask, ground_truth_mask):
+    """
+    Calculate Intersection over Union (IoU) between predicted and ground truth masks.
+    
+    Parameters:
+        predicted_mask (np.ndarray): Binary mask for predicted labels.
+        ground_truth_mask (np.ndarray): Binary mask for ground truth labels.
+    
+    Returns:
+        float: IoU score.
+    """
+    intersection = np.sum(predicted_mask & ground_truth_mask)
+    union = np.sum(predicted_mask | ground_truth_mask)
+    return intersection / union if union != 0 else 0
+
+## IoU
+# How to call: iou_list, mean_iou = compute_iou(predictions, ground_truth, num_classes)
+def compute_iou(predictions, ground_truth, num_classes):
+    iou_list = []
+    for cls in range(num_classes):
+        pred_mask = (predictions == cls)
+        gt_mask = (ground_truth == cls)
+        intersection = np.sum(np.logical_and(pred_mask, gt_mask))
+        union = np.sum(np.logical_or(pred_mask, gt_mask))
+        if union == 0:
+            iou = 0.0  # Handle edge case where union is zero
+        else:
+            iou = intersection / union
+        iou_list.append(iou)
+    miou = np.mean(iou_list)
+    return iou_list, miou
+
+## Panoptic Quality
+# How to call: pq = compute_pq(predictions, ground_truth, num_classes)
+def compute_pq(predictions, ground_truth, num_classes):
+    tp, fp, fn = 0, 0, 0
+    for cls in range(num_classes):
+        pred_mask = (predictions == cls)
+        gt_mask = (ground_truth == cls)
+        tp += np.sum(np.logical_and(pred_mask, gt_mask))
+        fp += np.sum(np.logical_and(pred_mask, np.logical_not(gt_mask)))
+        fn += np.sum(np.logical_and(np.logical_not(pred_mask), gt_mask))
+    pq = tp / (tp + 0.5 * (fp + fn))
+    return pq
+
+## precision, recall and F1 metric
+# How to call: precision_list, recall_list, f1_list, mean_precision, mean_recall, mean_f1 = compute_metrics(predictions, ground_truth, num_classes)
+def compute_metrics(predictions, ground_truth, num_classes):
+    precision_list = []
+    recall_list = []
+    f1_list = []
+    for cls in range(num_classes):
+        pred_mask = (predictions == cls)
+        gt_mask = (ground_truth == cls)
+        
+        # Flatten the masks to compute metrics
+        pred_mask_flat = pred_mask.flatten()
+        gt_mask_flat = gt_mask.flatten()
+        
+        # Compute precision, recall, and F1 score
+        precision = precision_score(gt_mask_flat, pred_mask_flat, average='binary', zero_division=0)
+        recall = recall_score(gt_mask_flat, pred_mask_flat, average='binary', zero_division=0)
+        f1 = f1_score(gt_mask_flat, pred_mask_flat, average='binary', zero_division=0)
+        
+        precision_list.append(precision)
+        recall_list.append(recall)
+        f1_list.append(f1)
+    
+    # Compute mean precision, recall, and F1 score
+    mean_precision = np.mean(precision_list)
+    mean_recall = np.mean(recall_list)
+    mean_f1 = np.mean(f1_list)
+    
+    return precision_list, recall_list, f1_list, mean_precision, mean_recall, mean_f1
+
+

@@ -187,21 +187,21 @@ def cal_group(input_dict, new_input_dict, match_inds, ratio=0.5):
             group_1[group_1 == group_i] = group_j
     return group_1
 
-
-def custom_hash_3d_coordinate(x, y, z):
-    """Generate a custom hash value for a 3D coordinate."""
-    # Example custom hash function
-    return hash((x, y, z))
-
 def normalized_feature_difference(f_i, f_j):
     # Calculate the Euclidean norm of the difference
     difference_norm = np.linalg.norm(f_i - f_j)
     # Normalize the difference norm
-    normalized_difference = difference_norm / 4
+    normalized_difference = difference_norm / len(f_i)
     return normalized_difference
 
 # Mask ID correspondence between all frames
-def cal_graph(input_dict, new_input_dict, match_inds):
+def cal_graph(input_dict, new_input_dict, match_inds, coefficients=[0.25, 0.25, 0.25, 0.25]):
+
+    L1 = coefficients[0]
+    L2 = coefficients[0]
+    L3 = coefficients[0]
+    L4 = coefficients[0]
+
     group_0 = input_dict["group"]
     group_1 = new_input_dict["group"]
     coord_0 = input_dict["coord"]
@@ -283,7 +283,7 @@ def cal_graph(input_dict, new_input_dict, match_inds):
         elif group_i == -1 or group_j == -1:
             continue
         else:'''
-        cost[overlap_key] += normalized_feature_difference(feature_i,feature_j) + abs(stability_score_i - stability_score_j) + abs(predicted_iou_i - predicted_iou_j)
+        cost[overlap_key] += L1*normalized_feature_difference(feature_i,feature_j) + L2*abs(stability_score_i - stability_score_j) + L3*abs(predicted_iou_i - predicted_iou_j)
 
     #print("cost: ", cost)
 
@@ -298,8 +298,8 @@ def cal_graph(input_dict, new_input_dict, match_inds):
     # Add edges based on group_overlap
     for (group_i, view_id_i, view_name_i, point_cnt_group_i, group_j, view_id_j, view_name_j, point_cnt_group_j), count in group_overlap.items():
         cost[(group_i, view_id_i, view_name_i, point_cnt_group_i, group_j, view_id_j, view_name_j, point_cnt_group_j)] /= count
-        cost[(group_i, view_id_i, view_name_i, point_cnt_group_i, group_j, view_id_j, view_name_j, point_cnt_group_j)] += max(0,(1 - count/min(point_cnt_group_i,point_cnt_group_j)))
-        cost[(group_i, view_id_i, view_name_i, point_cnt_group_i, group_j, view_id_j, view_name_j, point_cnt_group_j)] /= 4 # divide the number of components in cost function
+        cost[(group_i, view_id_i, view_name_i, point_cnt_group_i, group_j, view_id_j, view_name_j, point_cnt_group_j)] += L4*max(0,(1 - count/min(point_cnt_group_i,point_cnt_group_j)))
+        #cost[(group_i, view_id_i, view_name_i, point_cnt_group_i, group_j, view_id_j, view_name_j, point_cnt_group_j)] /= 4 # divide the number of components in cost function
         correspondence_graph.add_edge(
                 (view_name_i, group_i), 
                 (view_name_j, group_j), 
@@ -312,7 +312,7 @@ def cal_graph(input_dict, new_input_dict, match_inds):
 
     return correspondence_graph, input_dict, new_input_dict
 
-def cal_scenes(pcd_list, index, voxel_size, voxelize, th=50):
+def cal_scenes(pcd_list, index, voxel_size, voxelize, th=50, coefficients=[0.25, 0.25, 0.25, 0.25]):
     #print(index, flush=True)
     input_dict_0 = pcd_list[index]
     input_dict_1 = {}
@@ -335,7 +335,7 @@ def cal_scenes(pcd_list, index, voxel_size, voxelize, th=50):
             # Cal Dul-overlap
             match_inds = get_matching_indices(pcd1, pcd0, 1.5 * voxel_size, 1)
             if match_inds:
-                correspondence_graph, input_dict_0, input_dict_1 = cal_graph(input_dict_0, input_dict_1, match_inds)
+                correspondence_graph, input_dict_0, input_dict_1 = cal_graph(input_dict_0, input_dict_1, match_inds, coefficients)
                 pcd_list[i].update(input_dict_1)
                 pcd_list[index].update(input_dict_0)
                 if len(correspondence_graph.nodes) > 0 and len(correspondence_graph.edges) > 0:
@@ -464,22 +464,21 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
         return
 
     # Step 1 in pipeline: SAM Generate Masks
-    # Returns the names of the multi-images in the scene
-
+    
     step1_output_path = os.path.join(save_path, scene_name + "_step1.pkl")
 
+    # Returns the names of the multi-images in the scene
     color_names = sorted(os.listdir(join(rgb_path, scene_name, 'color')), key=lambda a: int(os.path.basename(a).split('.')[0]))
         
     voxelize_new = Voxelize(voxel_size=args.voxel_size, mode="train", keys=("coord", "color", "group", "feature", "predicted_iou", "stability_score"))
 
-    # If the output of Step 1 already exists, load it
+    # If the output of Step 1 and 2 already exists, load it
     if os.path.exists(step1_output_path):
         with open(step1_output_path, 'rb') as f:
             pcd_list, pcd_list_ = pickle.load(f)
-        print("Loaded Step 1 output from file.")
+        print("Loaded Step 1 and 2 output from file.")
 
     else:
-        
         pcd_list = []
         pcd_list_ = []
         for color_id, color_name in enumerate(color_names):
@@ -540,22 +539,23 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
 
             pcd_list.append(pcd_dict)
             pcd_list_.append(pcd_dict_)
-        # Save the output of Step 1 to a file for future use
+    
+        # Step 2 in pipeline: Merge Two Adjacent Pointclouds until get single point cloud
+        while len(pcd_list) != 1:
+            print(len(pcd_list), flush=True)
+            new_pcd_list = []
+            for indice in pairwise_indices(len(pcd_list)):
+                #print(indice)
+                pcd_frame = cal_2_scenes(pcd_list, indice, voxel_size=voxel_size, voxelize=voxelize)
+                if pcd_frame is not None:
+                    new_pcd_list.append(pcd_frame)
+            pcd_list = new_pcd_list
+        
+        # Save the output of Step 1 and 2 to a file for future use
         with open(step1_output_path, 'wb') as f:
             pickle.dump((pcd_list, pcd_list_), f)
-        print("Saved Step 1 output to a file.")
-    
-    # Step 2 in pipeline: Merge Two Adjacent Pointclouds until get single point cloud
-    while len(pcd_list) != 1:
-        print(len(pcd_list), flush=True)
-        new_pcd_list = []
-        for indice in pairwise_indices(len(pcd_list)):
-            #print(indice)
-            pcd_frame = cal_2_scenes(pcd_list, indice, voxel_size=voxel_size, voxelize=voxelize)
-            if pcd_frame is not None:
-                new_pcd_list.append(pcd_frame)
-        pcd_list = new_pcd_list
-    
+        print("Saved Step 1 and 2 output to a file.")
+
     # New Step 2 in pipeline: Merge All Pointclouds in one shot globally to get single point cloud
     if len(pcd_list_) != 1:
         print("New Step 2")
@@ -598,7 +598,7 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
         # Perform hierarchical clustering
         Z = linkage(condensed_cost_matrix, method='average')
 
-        # Set a threshold to determine clusters (tune this threshold based on your data)
+        # Set a threshold to determine clusters (tune this threshold based on the data)
         threshold = 0.2
         clusters = fcluster(Z, t=threshold, criterion='distance')
 
@@ -772,9 +772,9 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
         }
         torch.save(data_dict, join(save_path, scene_name + "_gt.pth"))
 
-        accuracy_metrics = calculate_segmentation_accuracy(coord_, labels, labels_gt)
+        accuracy_metrics = calculate_segmentation_accuracy(labels, labels_gt)
         
-        accuracy_metrics_new = calculate_segmentation_accuracy(coord_, labels_new, labels_gt)
+        accuracy_metrics_new = calculate_segmentation_accuracy(labels_new, labels_gt)
         if verbose_comparisons:
             plot_accuracy_metrics(accuracy_metrics, scene_name)
             plot_accuracy_metrics(accuracy_metrics_new, scene_name)
