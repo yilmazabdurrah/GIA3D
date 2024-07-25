@@ -441,38 +441,6 @@ def draw_graph(graph, title, subplot_position):
 
     plt.title(title)
 
-def plot_accuracy_metrics(accuracy_metrics, scene_name):
-    """
-    Plot accuracy metrics.
-    
-    Parameters:
-        accuracy_metrics (dict): Dictionary containing overall accuracy and instance-wise accuracy.
-    """
-    # Extract overall accuracy and instance-wise accuracy
-    overall_accuracy = accuracy_metrics['overall_accuracy']
-    instance_accuracy = accuracy_metrics['instance_accuracy']
-
-    # Prepare data for plotting
-    group_ids = list(instance_accuracy.keys())
-    accuracies = list(instance_accuracy.values())
-    
-    # Add overall accuracy
-    group_ids.append('Overall')
-    accuracies.append(overall_accuracy)
-
-    # Convert group IDs to string for labeling
-    group_labels = [str(group) for group in group_ids]
-    
-    # Plotting
-    plt.figure(figsize=(12, 6))
-    plt.bar(range(len(group_labels)), accuracies, color='skyblue')
-    plt.xlabel('Group IDs and Overall')
-    plt.ylabel('Accuracy Rate')
-    plt.title(f'Accuracy Metrics for Group IDs and Overall - Scene: {scene_name}')
-    plt.ylim(-0.1, 1.1)  # Accuracy is between 0 and 1
-    plt.xticks(ticks=range(len(group_labels)), labels=group_labels, rotation=45)
-    plt.show()
-
 def load_ply(file_path):
     """
     Load a PLY file and return the points and their colors.
@@ -491,7 +459,6 @@ def to_numpy(x):
         x = x.clone().detach().cpu().numpy()
     assert isinstance(x, np.ndarray)
     return x
-
 
 def save_point_cloud(coord, color=None, file_path="pc.ply", logger=None):
     os.makedirs(os.path.dirname(file_path), exist_ok=True)
@@ -633,7 +600,7 @@ def delete_invalid_group(group, group_feat):
     group_feat = group_feat[indices]
     return group, group_feat
 
-def get_labels_from_colors(colors):
+def get_labels_from_colors(colors, gt_class="nyu40"):
     """
     Map RGB colors to class labels.
 
@@ -641,10 +608,18 @@ def get_labels_from_colors(colors):
     :return: List of class labels.
     """
     labels = []
+    if gt_class == "nyu40":
+        gt_colors_to_class = nyu40_colors_to_class
+    elif gt_class == "ScanNet20":
+        gt_colors_to_class = ScanNet20_colors_to_class
+    elif gt_class == "ScanNet200":
+        gt_colors_to_class = ScanNet200_colors_to_class
+    else:
+        gt_colors_to_class = nyu40_colors_to_class
     for color in colors:
         color_tuple = tuple(color)
-        if color_tuple in nyu40_colors_to_class:
-            labels.append(nyu40_colors_to_class[color_tuple]["id"])
+        if color_tuple in gt_colors_to_class:
+            labels.append(gt_colors_to_class[color_tuple]["id"])
         else:
             labels.append(-1)  # Unknown label
     return np.array(labels, dtype=np.int16)
@@ -652,87 +627,7 @@ def get_labels_from_colors(colors):
 ############################# Evaluation Metrics #########################################################
 
 ## Accuracy Score
-# How to call: accuracy_metrics = calculate_segmentation_accuracy(labels, labels_gt)
-def calculate_segmentation_accuracy(predicted_labels, ground_truth_labels):
-    """
-    Calculate the segmentation accuracy metrics.
-    
-    Parameters:
-        predicted_labels (np.ndarray): Predicted group labels.
-        ground_truth_labels (np.ndarray): Ground truth group labels.
-    
-    Returns:
-        dict: Dictionary containing overall accuracy and instance-wise accuracy.
-    """
-    
-    # Flatten the group arrays
-    predicted_groups = predicted_labels.flatten()
-    ground_truth_groups = ground_truth_labels.flatten()
-
-    # Calculate the overlap matrix
-    unique_pred = np.unique(predicted_groups)
-    unique_gt = np.unique(ground_truth_groups)
-    
-    overlap_matrix = np.zeros((len(unique_gt), len(unique_pred)), dtype=int)
-    
-    for i, gt_label in enumerate(unique_gt):
-        for j, pred_label in enumerate(unique_pred):
-            overlap_matrix[i, j] = np.sum((ground_truth_groups == gt_label) & (predicted_groups == pred_label))
-            #print(f"gt_label: {gt_label}, pred_label: {pred_label}, overlap_matrix[{i}, {j}]: {overlap_matrix[i, j]}")
-    
-    # Find the best match using the Hungarian algorithm
-    row_ind, col_ind = linear_sum_assignment(-overlap_matrix)
-    
-    # Create a mapping from predicted to ground truth labels
-    label_mapping = {unique_pred[col]: unique_gt[row] for row, col in zip(row_ind, col_ind)}
-
-    # Debug statements
-    #print("Unique predicted labels:", unique_pred)
-    #print("Unique ground truth labels:", unique_gt)
-    #print("Initial label mapping:", label_mapping)
-
-    # Handle unmapped predicted labels
-    remaining_pred_labels = set(unique_pred) - set(label_mapping.keys())
-    
-    while remaining_pred_labels:
-        # For each remaining predicted label, find the best matching ground truth label
-        for pred_label in list(remaining_pred_labels):
-            overlaps = np.array([np.sum((predicted_groups == pred_label) & (ground_truth_groups == gt_label)) for gt_label in unique_gt])
-            best_gt_label_index = np.argmax(overlaps)
-            best_gt_label = unique_gt[best_gt_label_index]
-            
-            # Update the mapping
-            label_mapping[pred_label] = best_gt_label
-            remaining_pred_labels.remove(pred_label)
-    
-    # Print the updated label mapping
-    #print("Final label mapping:", label_mapping)
-    
-    # Remap predicted labels
-    remapped_predicted_groups = np.array([label_mapping.get(label, -1) for label in predicted_groups])
-        
-    # Check if all predicted labels are in the mapping
-    missing_labels = [label for label in predicted_groups if label not in label_mapping]
-    if missing_labels:
-        print("Missing labels in label mapping:", missing_labels)
-        
-    # Calculate overall accuracy
-    overall_accuracy = accuracy_score(ground_truth_groups, remapped_predicted_groups)
-    
-    # Calculate instance-wise accuracy
-    instance_accuracy = {}
-    for instance in unique_gt:
-        instance_mask = (ground_truth_groups == instance)
-        instance_accuracy[instance] = accuracy_score(
-            ground_truth_groups[instance_mask],
-            remapped_predicted_groups[instance_mask]
-        )
-    
-    return {
-        "overall_accuracy": overall_accuracy,
-        "instance_accuracy": instance_accuracy
-    }
-
+# How to call: accuracy_metrics = calculate_segmentation_accuracy_iou(predicted_labels, ground_truth_labels)
 def calculate_segmentation_accuracy_iou(predicted_labels, ground_truth_labels):
     """
     Calculate the segmentation accuracy metrics based on IoU.
@@ -792,19 +687,26 @@ def calculate_segmentation_accuracy_iou(predicted_labels, ground_truth_labels):
         
     # Calculate overall accuracy
     overall_accuracy = accuracy_score(ground_truth_groups, remapped_predicted_groups)
+    print("ground_truth_groups: ", ground_truth_groups)
+    print("remapped_predicted_groups: ", remapped_predicted_groups)
+
+    print("ground_truth_groups uniques: ", set(ground_truth_groups))
+    print("remapped_predicted_groups uniques: ", set(remapped_predicted_groups))
     
-    # Calculate instance-wise accuracy
-    instance_accuracy = {}
-    for instance in unique_gt:
-        instance_mask = (ground_truth_groups == instance)
-        instance_accuracy[instance] = accuracy_score(
-            ground_truth_groups[instance_mask],
-            remapped_predicted_groups[instance_mask]
+    # Calculate group-wise accuracy
+    group_accuracy = {}
+    for group in unique_gt:
+        group_mask = (ground_truth_groups == group)
+        group_accuracy[group] = accuracy_score(
+            ground_truth_groups[group_mask],
+            remapped_predicted_groups[group_mask]
         )
     
     return {
-        "overall_accuracy": overall_accuracy,
-        "instance_accuracy": instance_accuracy
+        "overall": overall_accuracy,
+        "groupwise": group_accuracy,
+        "ground_truth_groups": ground_truth_groups,
+        "remapped_predicted_groups": remapped_predicted_groups
     }
 
 def calculate_iou(predicted_mask, ground_truth_mask):
@@ -823,10 +725,13 @@ def calculate_iou(predicted_mask, ground_truth_mask):
     return intersection / union if union != 0 else 0
 
 ## IoU
-# How to call: iou_list, mean_iou = compute_iou(predictions, ground_truth, num_classes)
-def compute_iou(predictions, ground_truth, num_classes):
-    iou_list = []
-    for cls in range(num_classes):
+# How to call: iou_dict, mean_iou = compute_iou(predictions, ground_truth)
+def compute_iou(predictions, ground_truth):
+    # Get unique classes from both predictions and ground truth
+    unique_classes = np.unique(ground_truth)
+    
+    iou_dict = {}
+    for cls in unique_classes:
         pred_mask = (predictions == cls)
         gt_mask = (ground_truth == cls)
         intersection = np.sum(np.logical_and(pred_mask, gt_mask))
@@ -835,30 +740,45 @@ def compute_iou(predictions, ground_truth, num_classes):
             iou = 0.0  # Handle edge case where union is zero
         else:
             iou = intersection / union
-        iou_list.append(iou)
-    miou = np.mean(iou_list)
-    return iou_list, miou
+        iou_dict[cls] = iou
+    miou = np.mean(list(iou_dict.values()))
+    return iou_dict, miou
 
 ## Panoptic Quality
-# How to call: pq = compute_pq(predictions, ground_truth, num_classes)
-def compute_pq(predictions, ground_truth, num_classes):
+# How to call: pq_dict, overall_pq = compute_pq(predictions, ground_truth)
+def compute_pq(predictions, ground_truth):
+    # Get unique classes from both predictions and ground truth
+    unique_classes = np.unique(ground_truth)
+    
+    pq_dict = {}
     tp, fp, fn = 0, 0, 0
-    for cls in range(num_classes):
+    for cls in unique_classes:
         pred_mask = (predictions == cls)
         gt_mask = (ground_truth == cls)
-        tp += np.sum(np.logical_and(pred_mask, gt_mask))
-        fp += np.sum(np.logical_and(pred_mask, np.logical_not(gt_mask)))
-        fn += np.sum(np.logical_and(np.logical_not(pred_mask), gt_mask))
-    pq = tp / (tp + 0.5 * (fp + fn))
-    return pq
+        cls_tp = np.sum(np.logical_and(pred_mask, gt_mask))
+        cls_fp = np.sum(np.logical_and(pred_mask, np.logical_not(gt_mask)))
+        cls_fn = np.sum(np.logical_and(np.logical_not(pred_mask), gt_mask))
+        cls_pq = cls_tp / (cls_tp + 0.5 * (cls_fp + cls_fn)) if (cls_tp + cls_fp + cls_fn) > 0 else 0
+        pq_dict[cls] = cls_pq
+        
+        tp += cls_tp
+        fp += cls_fp
+        fn += cls_fn
+    
+    overall_pq = tp / (tp + 0.5 * (fp + fn)) if (tp + fp + fn) > 0 else 0
+    return pq_dict, overall_pq
 
 ## precision, recall and F1 metric
-# How to call: precision_list, recall_list, f1_list, mean_precision, mean_recall, mean_f1 = compute_metrics(predictions, ground_truth, num_classes)
-def compute_metrics(predictions, ground_truth, num_classes):
-    precision_list = []
-    recall_list = []
-    f1_list = []
-    for cls in range(num_classes):
+# How to call: precision_dict, recall_dict, f1_dict, mean_precision, mean_recall, mean_f1 = compute_metrics(predictions, ground_truth)
+def compute_metrics(predictions, ground_truth):
+    # Get unique classes from both predictions and ground truth
+    unique_classes = np.unique(ground_truth)
+
+    precision_dict = {}
+    recall_dict = {}
+    f1_dict = {}
+    
+    for cls in unique_classes:
         pred_mask = (predictions == cls)
         gt_mask = (ground_truth == cls)
         
@@ -871,15 +791,47 @@ def compute_metrics(predictions, ground_truth, num_classes):
         recall = recall_score(gt_mask_flat, pred_mask_flat, average='binary', zero_division=0)
         f1 = f1_score(gt_mask_flat, pred_mask_flat, average='binary', zero_division=0)
         
-        precision_list.append(precision)
-        recall_list.append(recall)
-        f1_list.append(f1)
+        precision_dict[cls] = precision
+        recall_dict[cls] = recall
+        f1_dict[cls] = f1
     
     # Compute mean precision, recall, and F1 score
-    mean_precision = np.mean(precision_list)
-    mean_recall = np.mean(recall_list)
-    mean_f1 = np.mean(f1_list)
+    mean_precision = np.mean(list(precision_dict.values()))
+    mean_recall = np.mean(list(recall_dict.values()))
+    mean_f1 = np.mean(list(f1_dict.values()))
     
-    return precision_list, recall_list, f1_list, mean_precision, mean_recall, mean_f1
+    return precision_dict, recall_dict, f1_dict, mean_precision, mean_recall, mean_f1
+
+def plot_accuracy_metrics(accuracy_metrics, scene_name):
+    """
+    Plot accuracy metrics.
+    
+    Parameters:
+        accuracy_metrics (dict): Dictionary containing overall accuracy and group-wise accuracy.
+    """
+    # Extract overall accuracy and group-wise accuracy
+    overall = accuracy_metrics['overall']
+    groupwise = accuracy_metrics['groupwise']
+
+    # Prepare data for plotting
+    group_ids = list(groupwise.keys())
+    accuracies = list(groupwise.values())
+    
+    # Add overall accuracy
+    group_ids.append('Overall')
+    accuracies.append(overall)
+
+    # Convert group IDs to string for labeling
+    group_labels = [str(group) for group in group_ids]
+    
+    # Plotting
+    plt.figure(figsize=(12, 6))
+    plt.bar(range(len(group_labels)), accuracies, color='skyblue')
+    plt.xlabel('Group IDs and Overall')
+    plt.ylabel('Accuracy Rate')
+    plt.title(f'Accuracy Metrics for Group IDs and Overall - Scene: {scene_name}')
+    plt.ylim(-0.1, 1.1)  # Accuracy is between 0 and 1
+    plt.xticks(ticks=range(len(group_labels)), labels=group_labels, rotation=45)
+    plt.show()
 
 

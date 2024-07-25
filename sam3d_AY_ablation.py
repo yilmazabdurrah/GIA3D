@@ -610,6 +610,7 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
 
         # Prepare to store merged graphs for each coefficient combination
         merged_graphs = {}
+        merged_dicts = {}
 
         # Iterate over each coefficient combination
         for coefficients in valid_combinations:
@@ -696,53 +697,75 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
                 for edge in graph.edges(data=True):
                     print(edge)
 
-        # # Print nodes and edges of the new graph
-        # print("Nodes in the minimized graph:")
-        # for node in merged_graph_min.nodes():
-        #     print(node)
+            # # Print nodes and edges of the new graph
+            # print("Nodes in the minimized graph:")
+            # for node in merged_graph_min.nodes():
+            #     print(node)
 
-        # print("\nEdges in the minimized graph:")
-        # for u, v, data in merged_graph_min.edges(data=True):
-        #     print(f"From {u} to {v}: {data}")
+            # print("\nEdges in the minimized graph:")
+            # for u, v, data in merged_graph_min.edges(data=True):
+            #     print(f"From {u} to {v}: {data}")
 
-        pcd_dict_merged_ = update_groups_and_merge_dictionaries(pcd_list_, merged_graph_min)
+            pcd_dict_merged_ = update_groups_and_merge_dictionaries(pcd_list_, merged_graph_min)
+            merged_dicts[tuple(coefficients)] = pcd_dict_merged_
 
-        if verbose_graph:
-            # Create a figure for subplots
-            plt.figure(figsize=(15, 12))
+            if verbose_graph:
+                # Create a figure for subplots
+                plt.figure(figsize=(15, 12))
 
-            # Draw the first graph
-            plt.subplot(1, 2, 1)  # 1 row, 2 columns, 1st subplot
-            draw_graph(merged_graph, "Correspondences for All Viewpoints and Mask IDs before optimization", 121)
+                # Draw the first graph
+                plt.subplot(1, 2, 1)  # 1 row, 2 columns, 1st subplot
+                draw_graph(merged_graph, "Correspondences for All Viewpoints and Mask IDs before optimization", 121)
 
-            # Draw the second graph
-            plt.subplot(1, 2, 2)  # 1 row, 2 columns, 2nd subplot
-            draw_graph(merged_graph_min, "Correspondences for All Viewpoints and Mask IDs after optimization", 122)
+                # Draw the second graph
+                plt.subplot(1, 2, 2)  # 1 row, 2 columns, 2nd subplot
+                draw_graph(merged_graph_min, "Correspondences for All Viewpoints and Mask IDs after optimization", 122)
 
-            # Display the plot
-            plt.show()
+                # Display the plot
+                plt.show()
+
+        # Print merged dictionaries for debugging
+        for coefficients, merged_dict in merged_dicts.items():
+            print(f"\nMerged dictionary for coefficients {coefficients}:")
+            print(merged_dict)
 
     # Step 3 in pipeline: Region Merging Method
-    for i in range(2):
-        if i == 0:
-            seg_dict = pcd_list[0]
-        elif i == 1:
-            seg_dict = pcd_dict_merged_
-        else: 
-            seg_dict = pcd_list[0]
+    # Stage 1: Run i = 0 case once
+    seg_dict = pcd_list[0]
+    seg_dict["group"] = num_to_natural(remove_small_group(seg_dict["group"], th))
+
+    if scene_name in train_scenes:
+        scene_path = join(data_path, "train", scene_name + ".pth")
+    elif scene_name in val_scenes:
+        scene_path = join(data_path, "val", scene_name + ".pth")
+    else: 
+        scene_path = join(data_path, "test", scene_name + ".pth")
+
+    data_dict = torch.load(scene_path)
+    scene_coord = torch.tensor(data_dict["coord"]).cuda().contiguous()
+    new_offset = torch.tensor(scene_coord.shape[0]).cuda()
+    gen_coord = torch.tensor(seg_dict["coord"]).cuda().contiguous().float()
+    offset = torch.tensor(gen_coord.shape[0]).cuda()
+    gen_group = seg_dict["group"]
+    indices, dis = pointops.knn_query(1, gen_coord, offset, scene_coord, new_offset)
+    indices = indices.cpu().numpy()
+    group = gen_group[indices.reshape(-1)].astype(np.int16)
+    mask_dis = dis.reshape(-1).cpu().numpy() > 0.6
+    group[mask_dis] = -1
+    group = group.astype(np.int16)
+    labels = np.array(group)
+    coord_ = data_dict.get("coord", None)
+
+    # Stage 2: Iterate over the merged_dicts for the i = 1 case
+    labels_new_list = []
+
+    for coefficients, pcd_dict_merged_ in merged_dicts.items():
+        print(f"\nProcessing for coefficients {coefficients}:")
+
+        seg_dict = pcd_dict_merged_
         seg_dict["group"] = num_to_natural(remove_small_group(seg_dict["group"], th))
 
-        if scene_name in train_scenes:
-            scene_path = join(data_path, "train", scene_name + ".pth")
-        elif scene_name in val_scenes:
-            scene_path = join(data_path, "val", scene_name + ".pth")
-        else: 
-            scene_path = join(data_path, "test", scene_name + ".pth")
-        data_dict = torch.load(scene_path)
-        scene_coord = torch.tensor(data_dict["coord"]).cuda().contiguous()
-        new_offset = torch.tensor(scene_coord.shape[0]).cuda()
         gen_coord = torch.tensor(seg_dict["coord"]).cuda().contiguous().float()
-        offset = torch.tensor(gen_coord.shape[0]).cuda()
         gen_group = seg_dict["group"]
         indices, dis = pointops.knn_query(1, gen_coord, offset, scene_coord, new_offset)
         indices = indices.cpu().numpy()
@@ -750,18 +773,15 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
         mask_dis = dis.reshape(-1).cpu().numpy() > 0.6
         group[mask_dis] = -1
         group = group.astype(np.int16)
-        if i == 0:
-            #torch.save(num_to_natural(group), join(save_path, scene_name + ".pth"))
-            labels = np.array(group)
-            coord_ = data_dict.get("coord", None)
-        elif i == 1:
-            #torch.save(num_to_natural(group), join(save_path, scene_name + "_new" + ".pth"))
-            labels_new = np.array(group)
-        else: 
-            #torch.save(num_to_natural(group), join(save_path, scene_name + ".pth"))
-            labels = np.array(group)
+        labels_new = np.array(group)
 
-    # Comparisons
+        # Store labels_new in the list
+        labels_new_list.append((coefficients, labels_new))
+
+    # Debug: Print out results for each coefficient combination
+    for coefficients, labels_new in labels_new_list:
+        print(f"Labels_new for coefficients {coefficients}:")
+        print(labels_new)
 
     # Get GT data for the scene from dictionary
 
@@ -771,12 +791,17 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
     instance_gt = data_dict.get("instance_gt", None)
 
     nyu40class_mapping = {value["id"]: value["name"] for key, value in nyu40_colors_to_class.items()}
+    nyu40color_mapping = {value["id"]: key for key, value in nyu40_colors_to_class.items()}
     nyu40class_list = list(nyu40class_mapping.items())
 
     ScanNet20class_mapping = {value["id"]: value["name"] for key, value in ScanNet20_colors_to_class.items()}
+    ScanNet20color_mapping = {value["index"]: key for key, value in ScanNet20_colors_to_class.items()}
+    ScanNet20label_mapping = {value["index"]: value["id"] for key, value in ScanNet20_colors_to_class.items()}
     ScanNet20class_list = list(ScanNet20class_mapping.items())
 
     ScanNet200class_mapping = {value["id"]: value["name"] for key, value in ScanNet200_colors_to_class.items()}
+    ScanNet200color_mapping = {value["index"]: key for key, value in ScanNet200_colors_to_class.items()}
+    ScanNet200label_mapping = {value["index"]: value["id"] for key, value in ScanNet200_colors_to_class.items()}
     ScanNet200class_list = list(ScanNet200class_mapping.items())
     
     # for class_id, class_name in nyu40class_mapping.items():
@@ -787,9 +812,9 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
 
     # Check if the labels exist and print their shapes
     if semantic_gt20 is not None:
+        print(f"Semantic ground truth data exists for {scene_name} by ScanNet20 class")
         #print(f'semantic_gt20 shape: {semantic_gt20.shape}')
         unique_labels20 = set(semantic_gt20)
-        #unique_labels20 = {label + 1 for label in set(semantic_gt20)}
         print(f"Unique labels20: {unique_labels20}")
         for label in unique_labels20:
             if label < 0 or label >= len(ScanNet20class_list):
@@ -797,13 +822,19 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
             else: 
                 label, name = ScanNet20class_list[label]
                 print(f"Label {label}: {ScanNet20class_mapping.get(label, 'Unknown')}")
+        colors_gt20 = np.array([ScanNet20color_mapping[idx] for idx in semantic_gt20])
+        colors_gt20 = [tuple(color) for color in colors_gt20]
+        labels_gt20 = np.array([ScanNet20label_mapping[idx] for idx in semantic_gt20])
+
+        print(f"Unique colors20: {set(colors_gt20)}")
+        print(f"Unique labels20: {set(labels_gt20)}")
     else:
-        print('semantic_gt20 not found in the data_dict')
+        print(f'semantic_gt20 not found in the data_dict for {scene_name}')
 
     if semantic_gt200 is not None:
+        print(f"Semantic ground truth data exists for {scene_name} by ScanNet200 class")
         #print(f'semantic_gt200 shape: {semantic_gt200.shape}')
         unique_labels200 = set(semantic_gt200)
-        #unique_labels200 = {label + 1 for label in set(semantic_gt200)}
         print(f"Unique labels200: {unique_labels200}")
         #print(list(ScanNet200class_mapping)[0])
         for label in unique_labels200:
@@ -812,51 +843,236 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
             else:
                 label, name = ScanNet200class_list[label]
                 print(f"Label {label}: {ScanNet200class_mapping.get(label, 'Unknown')}")
+        colors_gt200 = np.array([ScanNet200color_mapping[idx] for idx in semantic_gt200])
+        colors_gt200 = [tuple(color) for color in colors_gt200]
+        labels_gt200 = np.array([ScanNet200label_mapping[idx] for idx in semantic_gt200])
+        print(f"Unique colors200: {set(colors_gt200)}")
+        print(f"Unique labels200: {set(labels_gt200)}")
     else:
-        print('semantic_gt200 not found in the data_dict')
+        print(f'semantic_gt200 not found in the data_dict for {scene_name}')
 
     if instance_gt is not None:
+        print(f"Instance ground truth data exists for {scene_name}")
         #print(f'instance_gt shape: {instance_gt.shape}')
         unique_instances = set(instance_gt)
         print(f"Unique instances: {unique_instances}")
     else:
-        print('instance_gt not found in the data_dict')
+        print(f'instance_gt not found in the data_dict for {scene_name}')
 
-    # Get GT data for the scene nyu40class
+    # Get GT data for the scene by nyu40class
 
     if os.path.exists(join(gt_data_path, scene_name, scene_name + "_vh_clean_2.labels.ply")):
-        print(f"Ground truth data exists for {scene_name}")
+        print(f"Semantic ground truth data exists for {scene_name} by nyu40 class")
 
         points_gt, colors_gt = load_ply(join(gt_data_path, scene_name, scene_name + "_vh_clean_2.labels.ply"))
 
-        labels_gt = get_labels_from_colors(colors_gt)
-        
-        data_dict = {
-            "coord": points_gt,
-            "labels": labels_gt,
-            "colors": colors_gt
-        }
-        torch.save(data_dict, join(save_path, scene_name + "_gt.pth"))
-
-        accuracy_metrics = calculate_segmentation_accuracy_iou(labels, labels_gt)
-        
-        accuracy_metrics_new = calculate_segmentation_accuracy_iou(labels_new, labels_gt)
-        if verbose_comparisons:
-            plot_accuracy_metrics(accuracy_metrics, scene_name)
-            plot_accuracy_metrics(accuracy_metrics_new, scene_name)
-        else:
-            print(f"Results for classic one")
-            print(f"Overall Accuracy: {accuracy_metrics['overall_accuracy']}")
-            for instance, accuracy in accuracy_metrics['instance_accuracy'].items():
-                print(f"Instance {instance} Accuracy: {accuracy}")
-            
-            print(f"Results for updated one")
-            print(f"Overall Accuracy: {accuracy_metrics_new['overall_accuracy']}")
-            for instance, accuracy in accuracy_metrics_new['instance_accuracy'].items():
-                print(f"Instance {instance} Accuracy: {accuracy}")
+        labels_gt = get_labels_from_colors(colors_gt, gt_class="nyu40")
     else:
-        print(f"Ground truth data does not exist for {scene_name} to compare segmentation results")
+        print(f"Semantic ground truth data does not exist for {scene_name} by nyu40 class to compare segmentation results")  
+
     
+    # Prepare the comparison_input_dict
+    comparison_input_dict = {
+        "coord": coord_,
+        "labels_baseline": labels,
+        "labels_global": labels_new_list
+    }
+
+    # Add ground truth data if available
+    if labels_gt20 is not None:
+        comparison_input_dict["labels_gt20"] = labels_gt20
+        comparison_input_dict["colors_gt20"] = colors_gt20
+
+    if labels_gt200 is not None:
+        comparison_input_dict["labels_gt200"] = labels_gt200
+        comparison_input_dict["colors_gt200"] = colors_gt200
+
+    if points_gt is not None:
+        comparison_input_dict["coord_nyu"] = points_gt
+        comparison_input_dict["labels_nyu"] = labels_gt
+        comparison_input_dict["colors_nyu"] = colors_gt
+
+    # Save the comparison_input_dict
+    torch.save(comparison_input_dict, join(save_path, scene_name + "_comparisons_input.pth"))
+
+    # Comparisons
+
+    # Initialize an empty dictionary for storing the comparison results
+    comparison_results_dict = {}
+
+    gt_methods = {"nyu40", "ScanNet20", "ScanNet200"}
+
+    for gt_method in gt_methods:
+        if gt_method == "nyu40":
+            labels_gt_ = comparison_input_dict["labels_nyu"]
+        elif gt_method == "ScanNet20":
+            labels_gt_ = comparison_input_dict["labels_gt20"]
+        elif gt_method == "ScanNet200":
+            labels_gt_ = comparison_input_dict["labels_gt200"]
+        else:
+            print("GT method chosen is not available!!!")
+            continue
+        
+        baseline_metrics = compare_segmentation_output(comparison_input_dict["labels_baseline"], labels_gt_, method="baseline", gt=gt_method)
+        comparison_results_dict[f"{gt_method}_baseline"] = baseline_metrics
+
+        global_metrics_list = compare_segmentation_output(comparison_input_dict["labels_global"], labels_gt_, method="global", gt=gt_method)
+        for idx, global_metrics in enumerate(global_metrics_list):
+            comparison_results_dict[f"{gt_method}_global_coeff_{idx}"] = global_metrics
+
+    # Save the comparison_results_dict
+    torch.save(comparison_results_dict, join(save_path, scene_name + "_comparisons_output.pth"))
+
+
+def compare_segmentation_output(labels_list, labels_gt, method="baseline", gt="nyu40"):
+    def calculate_and_store_metrics(labels):
+        accuracy_metrics = calculate_segmentation_accuracy_iou(labels, labels_gt)
+        iou_dict, mean_iou = compute_iou(accuracy_metrics["remapped_predicted_groups"], accuracy_metrics["ground_truth_groups"])
+        pq_dict, overall_pq = compute_pq(accuracy_metrics["remapped_predicted_groups"], accuracy_metrics["ground_truth_groups"])
+        precision_dict, recall_dict, f1_dict, mean_precision, mean_recall, mean_f1 = compute_metrics(accuracy_metrics["remapped_predicted_groups"], accuracy_metrics["ground_truth_groups"])
+
+        iou_metrics = {
+            "overall": mean_iou,
+            "groupwise": iou_dict
+        }
+
+        pq_metrics = {
+            "overall": overall_pq,
+            "groupwise": pq_dict
+        }
+
+        f1_metrics = {
+            "overall": mean_f1,
+            "groupwise": f1_dict
+        }
+
+        recall_metrics = {
+            "overall": mean_recall,
+            "groupwise": recall_dict
+        }
+
+        precision_metrics = {
+            "overall": mean_precision,
+            "groupwise": precision_dict
+        }
+
+        metrics = {
+            "accuracy_metrics": accuracy_metrics,
+            "iou_metrics": iou_metrics,
+            "pq_metrics": pq_metrics,
+            "f1_metrics": f1_metrics,
+            "recall_metrics": recall_metrics,
+            "precision_metrics": precision_metrics
+        }
+        
+        return metrics
+    
+    if method == "baseline":
+        labels = labels_list
+        metrics = calculate_and_store_metrics(labels)
+        
+        if verbose_comparisons:
+            plot_accuracy_metrics(metrics["accuracy_metrics"], scene_name + f"_{method}_vs_GT-{gt} for Accuracy")
+            plot_accuracy_metrics(metrics["iou_metrics"], scene_name + f"_{method}_vs_GT-{gt} for IoU")
+            plot_accuracy_metrics(metrics["pq_metrics"], scene_name + f"_{method}_vs_GT-{gt} for Panoptic Quality")
+            plot_accuracy_metrics(metrics["recall_metrics"], scene_name + f"_{method}_vs_GT-{gt} for Recall")
+            plot_accuracy_metrics(metrics["precision_metrics"], scene_name + f"_{method}_vs_GT-{gt} for Precision")
+            plot_accuracy_metrics(metrics["f1_metrics"], scene_name + f"_{method}_vs_GT-{gt} for F1-score")
+        else:
+            print(f"Results for baseline (classic) one")
+            print(f"Overall Accuracy: {metrics['accuracy_metrics']['overall']}")
+            for group, accuracy in metrics['accuracy_metrics']['groupwise'].items():
+                print(f"Group {group} Accuracy: {accuracy}")
+            print(f"Overall IoU: {metrics['iou_metrics']['overall']}")
+            for group, iou in metrics['iou_metrics']['groupwise'].items():
+                print(f"Group {group} IoU: {iou}")
+            print(f"Overall Panoptic Quality: {metrics['pq_metrics']['overall']}")
+            for group, pq in metrics['pq_metrics']['groupwise'].items():
+                print(f"Group {group} Panoptic Quality: {pq}")
+            print(f"Overall Precision: {metrics['precision_metrics']['overall']}")
+            for group, precision in metrics['precision_metrics']['groupwise'].items():
+                print(f"Group {group} Precision: {precision}")
+            print(f"Overall Recall: {metrics['recall_metrics']['overall']}")
+            for group, recall in metrics['recall_metrics']['groupwise'].items():
+                print(f"Group {group} Recall: {recall}")
+            print(f"Overall F1-score: {metrics['f1_metrics']['overall']}")
+            for group, f1 in metrics['f1_metrics']['groupwise'].items():
+                print(f"Group {group} F1-score: {f1}")
+
+        return metrics
+    
+    elif method == "global":
+        metrics_list = []
+        for coefficients, labels in labels_list:
+            metrics = calculate_and_store_metrics(labels)
+            metrics_list.append({
+                "coefficients": coefficients,
+                "metrics": metrics
+            })
+            
+            if verbose_comparisons:
+                plot_accuracy_metrics(metrics["accuracy_metrics"], scene_name + f"_{method}_{coefficients}_vs_GT-{gt} for Accuracy")
+                plot_accuracy_metrics(metrics["iou_metrics"], scene_name + f"_{method}_{coefficients}_vs_GT-{gt} for IoU")
+                plot_accuracy_metrics(metrics["pq_metrics"], scene_name + f"_{method}_{coefficients}_vs_GT-{gt} for Panoptic Quality")
+                plot_accuracy_metrics(metrics["recall_metrics"], scene_name + f"_{method}_{coefficients}_vs_GT-{gt} for Recall")
+                plot_accuracy_metrics(metrics["precision_metrics"], scene_name + f"_{method}_{coefficients}_vs_GT-{gt} for Precision")
+                plot_accuracy_metrics(metrics["f1_metrics"], scene_name + f"_{method}_{coefficients}_vs_GT-{gt} for F1-score")
+            else:
+                print(f"Results for global one for coefficients {coefficients}")
+                print(f"Overall Accuracy: {metrics['accuracy_metrics']['overall']}")
+                for group, accuracy in metrics['accuracy_metrics']['groupwise'].items():
+                    print(f"Group {group} Accuracy: {accuracy}")
+                print(f"Overall IoU: {metrics['iou_metrics']['overall']}")
+                for group, iou in metrics['iou_metrics']['groupwise'].items():
+                    print(f"Group {group} IoU: {iou}")
+                print(f"Overall Panoptic Quality: {metrics['pq_metrics']['overall']}")
+                for group, pq in metrics['pq_metrics']['groupwise'].items():
+                    print(f"Group {group} Panoptic Quality: {pq}")
+                print(f"Overall Precision: {metrics['precision_metrics']['overall']}")
+                for group, precision in metrics['precision_metrics']['groupwise'].items():
+                    print(f"Group {group} Precision: {precision}")
+                print(f"Overall Recall: {metrics['recall_metrics']['overall']}")
+                for group, recall in metrics['recall_metrics']['groupwise'].items():
+                    print(f"Group {group} Recall: {recall}")
+                print(f"Overall F1-score: {metrics['f1_metrics']['overall']}")
+                for group, f1 in metrics['f1_metrics']['groupwise'].items():
+                    print(f"Group {group} F1-score: {f1}")
+
+        return metrics_list
+    
+    else:
+        labels = labels_list
+        metrics = calculate_and_store_metrics(labels)
+        
+        if verbose_comparisons:
+            plot_accuracy_metrics(metrics["accuracy_metrics"], scene_name + f"_{method}_vs_GT-{gt} for Accuracy")
+            plot_accuracy_metrics(metrics["iou_metrics"], scene_name + f"_{method}_vs_GT-{gt} for IoU")
+            plot_accuracy_metrics(metrics["pq_metrics"], scene_name + f"_{method}_vs_GT-{gt} for Panoptic Quality")
+            plot_accuracy_metrics(metrics["recall_metrics"], scene_name + f"_{method}_vs_GT-{gt} for Recall")
+            plot_accuracy_metrics(metrics["precision_metrics"], scene_name + f"_{method}_vs_GT-{gt} for Precision")
+            plot_accuracy_metrics(metrics["f1_metrics"], scene_name + f"_{method}_vs_GT-{gt} for F1-score")
+        else:
+            print(f"Results for {method} one")
+            print(f"Overall Accuracy: {metrics['accuracy_metrics']['overall']}")
+            for group, accuracy in metrics['accuracy_metrics']['groupwise'].items():
+                print(f"Group {group} Accuracy: {accuracy}")
+            print(f"Overall IoU: {metrics['iou_metrics']['overall']}")
+            for group, iou in metrics['iou_metrics']['groupwise'].items():
+                print(f"Group {group} IoU: {iou}")
+            print(f"Overall Panoptic Quality: {metrics['pq_metrics']['overall']}")
+            for group, pq in metrics['pq_metrics']['groupwise'].items():
+                print(f"Group {group} Panoptic Quality: {pq}")
+            print(f"Overall Precision: {metrics['precision_metrics']['overall']}")
+            for group, precision in metrics['precision_metrics']['groupwise'].items():
+                print(f"Group {group} Precision: {precision}")
+            print(f"Overall Recall: {metrics['recall_metrics']['overall']}")
+            for group, recall in metrics['recall_metrics']['groupwise'].items():
+                print(f"Group {group} Recall: {recall}")
+            print(f"Overall F1-score: {metrics['f1_metrics']['overall']}")
+            for group, f1 in metrics['f1_metrics']['groupwise'].items():
+                print(f"Group {group} F1-score: {f1}")
+
+        return metrics
 
 def get_args():
     '''Command line arguments.'''
