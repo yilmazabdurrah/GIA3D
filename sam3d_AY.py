@@ -467,20 +467,19 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
         return
 
     # Step 1 in pipeline: SAM Generate Masks
-    
-    step1_output_path = os.path.join(save_path, scene_name + "_step1.pkl")
+
+    step1_output_path = os.path.join(save_path, scene_name + "_step1.pth")
 
     # Returns the names of the multi-images in the scene
-    color_names = sorted(os.listdir(join(rgb_path, scene_name, 'color')), key=lambda a: int(os.path.basename(a).split('.')[0]))
-        
+    color_names = sorted(os.listdir(os.path.join(rgb_path, scene_name, 'color')), key=lambda a: int(os.path.basename(a).split('.')[0]))
+
     voxelize_new = Voxelize(voxel_size=args.voxel_size, mode="train", keys=("coord", "color", "group", "feature", "predicted_iou", "stability_score"))
 
     # If the output of Step 1 and 2 already exists, load it
     if os.path.exists(step1_output_path):
-        with open(step1_output_path, 'rb') as f:
-            pcd_list, pcd_list_ = pickle.load(f)
+        data = torch.load(step1_output_path)
+        pcd_list, pcd_list_ = data['pcd_list'], data['pcd_list_']
         print("Loaded Step 1 and 2 output from file.")
-
     else:
         pcd_list = []
         pcd_list_ = []
@@ -495,16 +494,15 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
 
             pcd_dict.update(viewpoint_id=viewpoint_ids, viewpoint_name=viewpoint_names)
 
-            '''if verbose:
-                # Extract data from tvoxelizedhe dictionary
-                coords = pcd_dict['coord']
-                colors = pcd_dict['color']
-                group_ids = pcd_dict['group']
-                #viewpoint_name = pcd_dict['viewpoint_name']
-                viewpoint_ids = pcd_dict['viewpoint_id']
-                stability_scores = pcd_dict['stability_score']
-                predicted_ious = pcd_dict['predicted_iou']
-                features = pcd_dict['feature']
+            if verbose:
+                # Extract data from the dictionary
+                coords = pcd_dict_['coord']
+                colors = pcd_dict_['color']
+                group_ids = pcd_dict_['group']
+                viewpoint_ids = pcd_dict_['viewpoint_id']
+                stability_scores = pcd_dict_['stability_score']
+                predicted_ious = pcd_dict_['predicted_iou']
+                features = pcd_dict_['feature']
 
                 # Print the header
                 print(f"{'Viewpoint ID':<10} {'Coord':<65} {'Color':<20} {'Group ID':<10} {'Stability Score':<20} {'Prediction IOU':<20} {'Feature':<40}")
@@ -513,8 +511,7 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
                     coord_str = ', '.join(map(str, coord))
                     color_str = ', '.join(map(str, color))
                     feature_str = ', '.join(map(str, feature))
-                    #if group_id == -1:
-                    print(f"{viewpoint_id:<10} {coord_str:<65} {color_str:<20} {group_id:<10} {stability_score:<20} {predicted_iou:<20} {feature_str:<40}")'''
+                    print(f"{viewpoint_id:<10} {coord_str:<65} {color_str:<20} {group_id:<10} {stability_score:<20} {predicted_iou:<20} {feature_str:<40}")
 
             pcd_dict_ = voxelize_new(pcd_dict)
             pcd_dict = voxelize(pcd_dict)
@@ -524,11 +521,10 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
                 coords = pcd_dict_['coord']
                 colors = pcd_dict_['color']
                 group_ids = pcd_dict_['group']
-                #viewpoint_name = pcd_dict['viewpoint_name']
                 viewpoint_ids = pcd_dict_['viewpoint_id']
                 stability_scores = pcd_dict_['stability_score']
                 predicted_ious = pcd_dict_['predicted_iou']
-                features = pcd_dict_['feature'] 
+                features = pcd_dict_['feature']
 
                 # Print the header
                 print(f"{'Viewpoint ID':<10} {'Coord':<65} {'Color':<20} {'Group ID':<10} {'Stability Score':<20} {'Prediction IOU':<20} {'Feature':<40}")
@@ -537,26 +533,23 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
                     coord_str = ', '.join(map(str, coord))
                     color_str = ', '.join(map(str, color))
                     feature_str = ', '.join(map(str, feature))
-                    #if group_id == -1:
                     print(f"{viewpoint_id:<10} {coord_str:<65} {color_str:<20} {group_id:<10} {stability_score:<20} {predicted_iou:<20} {feature_str:<40}")
 
             pcd_list.append(pcd_dict)
             pcd_list_.append(pcd_dict_)
-    
+
         # Step 2 in pipeline: Merge Two Adjacent Pointclouds until get single point cloud
         while len(pcd_list) != 1:
             print(len(pcd_list), flush=True)
             new_pcd_list = []
             for indice in pairwise_indices(len(pcd_list)):
-                #print(indice)
                 pcd_frame = cal_2_scenes(pcd_list, indice, voxel_size=voxel_size, voxelize=voxelize)
                 if pcd_frame is not None:
                     new_pcd_list.append(pcd_frame)
             pcd_list = new_pcd_list
-        
+
         # Save the output of Step 1 and 2 to a file for future use
-        with open(step1_output_path, 'wb') as f:
-            pickle.dump((pcd_list, pcd_list_), f)
+        torch.save({'pcd_list': pcd_list, 'pcd_list_': pcd_list_}, step1_output_path)
         print("Saved Step 1 and 2 output to a file.")
 
     # New Step 2 in pipeline: Merge All Pointclouds in one shot globally to get single point cloud
