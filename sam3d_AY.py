@@ -72,8 +72,19 @@ def get_sam(image, mask_generator):
     return group_ids, stability_scores, predicted_ious, features
 
 def get_pcd(scene_name, color_name, rgb_path, mask_generator, save_2dmask_path):
-    #intrinsic_path = join(rgb_path, scene_name,'intrinsics_depth.txt') 
-    intrinsic_path = join(rgb_path, scene_name, 'intrinsics', 'intrinsic_depth.txt')
+    # Define possible paths for the intrinsic file
+    intrinsic_path1 = os.path.join(rgb_path, scene_name, 'intrinsics_depth.txt')
+    intrinsic_path2 = os.path.join(rgb_path, scene_name, 'intrinsics', 'intrinsic_depth.txt')
+
+    # Check which path exists
+    if os.path.exists(intrinsic_path1):
+        intrinsic_path = intrinsic_path1
+    elif os.path.exists(intrinsic_path2):
+        intrinsic_path = intrinsic_path2
+    else:
+        print(f"Intrinsic file not found in either {intrinsic_path1} or {intrinsic_path2}")
+
+    # Load the intrinsic file
     depth_intrinsic = np.loadtxt(intrinsic_path)
 
     pose = join(rgb_path, scene_name, 'pose', color_name[0:-4] + '.txt')
