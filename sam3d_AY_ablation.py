@@ -36,6 +36,8 @@ import matplotlib.pyplot as plt
 from scipy.cluster.hierarchy import linkage, fcluster
 from scipy.spatial.distance import squareform
 
+import gc
+
 verbose = False # To print out intermediate data
 verbose_graph = False # To plot correspondence graphs before and after optimization
 verbose_comparisons = False # To plot comparison output
@@ -469,9 +471,14 @@ def update_groups_and_merge_dictionaries(pcd_list_, merged_graph_min):
     return voxelize(pcd_dict)
 
 # Focus on this function for global mask_ID solution
-def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_size, voxelize, th, train_scenes, val_scenes, save_2dmask_path, gt_data_path):
-    print(scene_name, flush=True)
+def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_size, voxelize, th, train_scenes, val_scenes, abl_scenes, save_2dmask_path, gt_data_path):
     
+    if scene_name not in abl_scenes:
+        return
+
+    print(f"Ablation scenes: {abl_scenes}")
+    print(scene_name, flush=True)
+
     if scene_name in train_scenes:
         scene_path = join(data_path, "train", scene_name + ".pth")
     elif scene_name in val_scenes:
@@ -487,7 +494,7 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
 
     # Step 1 in pipeline: SAM Generate Masks
 
-    step1_output_path = os.path.join(save_path, scene_name + "_step1.pth")
+    step1_output_path = os.path.join(save_2dmask_path, scene_name + "_step1.pth")
 
     # Returns the names of the multi-images in the scene
     color_names = sorted(os.listdir(os.path.join(rgb_path, scene_name, 'color')), key=lambda a: int(os.path.basename(a).split('.')[0]))
@@ -585,8 +592,8 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
             group_index[group_index != -1] += group_index_last.max() + 1
             pcd_list_[index]["group"] = group_index
 
-        step_size = 0.5
-        coefficients_range = np.arange(0, 1.1, step_size)
+        step_size = 0.05
+        coefficients_range = np.arange(0, 1.01, step_size)
 
         # Generate all possible combinations of lambda values and filter those that sum to 1
         valid_combinations = [list(combination) for combination in itertools.product(coefficients_range, repeat=4) if sum(combination) == 1]
@@ -596,13 +603,14 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
 
         merged_graph = nx.DiGraph()
         print(f"Number of scenes: {len(pcd_list_)}")
+        num_scene = len(pcd_list_) - 1
         for indice in range(len(pcd_list_)):
-            print(f"Current indice: {indice}")
+            print(f"Current scene: {indice}/{num_scene}")
             corr_graph, pcd_list_ = cal_scenes(pcd_list_, indice, voxel_size=voxel_size, voxelize=voxelize_new, coefficient_combinations=valid_combinations) 
             if len(corr_graph.nodes) > 0 and len(corr_graph.edges) > 0:
                 merged_graph = nx.compose(merged_graph, corr_graph)
-                #print(corr_graph.edges(data=True))
-        #print(merged_graph.edges(data=True))
+            del corr_graph
+            gc.collect()
 
         # Create cost matrix
         node_list = list(merged_graph.nodes())
@@ -643,6 +651,10 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
 
             # Perform hierarchical clustering
             Z = linkage(condensed_cost_matrix, method='average')
+
+            del cost_matrix
+            del condensed_cost_matrix
+            gc.collect()
 
             # Set a threshold to determine clusters (tune this threshold based on the data)
             threshold = 0.2
@@ -688,7 +700,7 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
             # Store the result for this coefficient combination
             merged_graphs[tuple(coefficients)] = merged_graph_min
 
-            for coefficients, graph in merged_graphs.items():
+            '''for coefficients, graph in merged_graphs.items():
                 print(f"\nMerged graph for coefficients {coefficients}:")
                 
                 # Print nodes
@@ -699,16 +711,7 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
                 # Print edges
                 print("Edges:")
                 for edge in graph.edges(data=True):
-                    print(edge)
-
-            # # Print nodes and edges of the new graph
-            # print("Nodes in the minimized graph:")
-            # for node in merged_graph_min.nodes():
-            #     print(node)
-
-            # print("\nEdges in the minimized graph:")
-            # for u, v, data in merged_graph_min.edges(data=True):
-            #     print(f"From {u} to {v}: {data}")
+                    print(edge)'''
 
             pcd_dict_merged_ = update_groups_and_merge_dictionaries(pcd_list_, merged_graph_min)
             merged_dicts[tuple(coefficients)] = pcd_dict_merged_
@@ -783,149 +786,57 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
         labels_new_list.append((coefficients, labels_new))
 
     # Debug: Print out results for each coefficient combination
-    for coefficients, labels_new in labels_new_list:
-        print(f"Labels_new for coefficients {coefficients}:")
-        print(labels_new)
+    #for coefficients, labels_new in labels_new_list:
+    #    print(f"Labels_new for coefficients {coefficients}:")
+    #    print(labels_new)
 
-    # Get GT data for the scene from dictionary
-
-    # Access the ground truth labels
-    semantic_gt20 = data_dict.get("semantic_gt20", None)
-    semantic_gt200 = data_dict.get("semantic_gt200", None)
-    instance_gt = data_dict.get("instance_gt", None)
-
-    nyu40class_mapping = {value["id"]: value["name"] for key, value in nyu40_colors_to_class.items()}
-    nyu40color_mapping = {value["id"]: key for key, value in nyu40_colors_to_class.items()}
-    nyu40class_list = list(nyu40class_mapping.items())
-
-    ScanNet20class_mapping = {value["id"]: value["name"] for key, value in ScanNet20_colors_to_class.items()}
-    ScanNet20color_mapping = {value["index"]: key for key, value in ScanNet20_colors_to_class.items()}
-    ScanNet20label_mapping = {value["index"]: value["id"] for key, value in ScanNet20_colors_to_class.items()}
-    ScanNet20class_list = list(ScanNet20class_mapping.items())
-
-    ScanNet200class_mapping = {value["id"]: value["name"] for key, value in ScanNet200_colors_to_class.items()}
-    ScanNet200color_mapping = {value["index"]: key for key, value in ScanNet200_colors_to_class.items()}
-    ScanNet200label_mapping = {value["index"]: value["id"] for key, value in ScanNet200_colors_to_class.items()}
-    ScanNet200class_list = list(ScanNet200class_mapping.items())
-    
-    # for class_id, class_name in nyu40class_mapping.items():
-        # print(f"ID: {class_id}, Class: {class_name}")
-    
-    # for class_id, class_name in ScanNet200class_mapping.items():
-        # print(f"ID: {class_id}, Class: {class_name}")
-
-    # Check if the labels exist and print their shapes
-    if semantic_gt20 is not None:
-        print(f"Semantic ground truth data exists for {scene_name} by ScanNet20 class")
-        #print(f'semantic_gt20 shape: {semantic_gt20.shape}')
-        unique_labels20 = set(semantic_gt20)
-        print(f"Unique labels20: {unique_labels20}")
-        for label in unique_labels20:
-            if label < 0 or label >= len(ScanNet20class_list):
-                print(f"Label {label}: {ScanNet20class_mapping.get(label, 'Unknown')}")
-            else: 
-                label, name = ScanNet20class_list[label]
-                print(f"Label {label}: {ScanNet20class_mapping.get(label, 'Unknown')}")
-        colors_gt20 = np.array([ScanNet20color_mapping[idx] for idx in semantic_gt20])
-        colors_gt20 = [tuple(color) for color in colors_gt20]
-        labels_gt20 = np.array([ScanNet20label_mapping[idx] for idx in semantic_gt20])
-
-        print(f"Unique colors20: {set(colors_gt20)}")
-        print(f"Unique labels20: {set(labels_gt20)}")
-    else:
-        print(f'semantic_gt20 not found in the data_dict for {scene_name}')
-
-    if semantic_gt200 is not None:
-        print(f"Semantic ground truth data exists for {scene_name} by ScanNet200 class")
-        #print(f'semantic_gt200 shape: {semantic_gt200.shape}')
-        unique_labels200 = set(semantic_gt200)
-        print(f"Unique labels200: {unique_labels200}")
-        #print(list(ScanNet200class_mapping)[0])
-        for label in unique_labels200:
-            if label < 0 or label >= len(ScanNet200class_list):
-                print(f"Label {label}: {ScanNet200class_mapping.get(label, 'Unknown')}")
-            else:
-                label, name = ScanNet200class_list[label]
-                print(f"Label {label}: {ScanNet200class_mapping.get(label, 'Unknown')}")
-        colors_gt200 = np.array([ScanNet200color_mapping[idx] for idx in semantic_gt200])
-        colors_gt200 = [tuple(color) for color in colors_gt200]
-        labels_gt200 = np.array([ScanNet200label_mapping[idx] for idx in semantic_gt200])
-        print(f"Unique colors200: {set(colors_gt200)}")
-        print(f"Unique labels200: {set(labels_gt200)}")
-    else:
-        print(f'semantic_gt200 not found in the data_dict for {scene_name}')
-
-    if instance_gt is not None:
-        print(f"Instance ground truth data exists for {scene_name}")
-        #print(f'instance_gt shape: {instance_gt.shape}')
-        unique_instances = set(instance_gt)
-        print(f"Unique instances: {unique_instances}")
-    else:
-        print(f'instance_gt not found in the data_dict for {scene_name}')
-
-    # Get GT data for the scene by nyu40class
-
-    if os.path.exists(join(gt_data_path, scene_name, scene_name + "_vh_clean_2.labels.ply")):
-        print(f"Semantic ground truth data exists for {scene_name} by nyu40 class")
-
-        points_gt, colors_gt = load_ply(join(gt_data_path, scene_name, scene_name + "_vh_clean_2.labels.ply"))
-
-        labels_gt = get_labels_from_colors(colors_gt, gt_class="nyu40")
-    else:
-        print(f"Semantic ground truth data does not exist for {scene_name} by nyu40 class to compare segmentation results")  
-
-    
-    # Prepare the comparison_input_dict
-    comparison_input_dict = {
-        "coord": coord_,
-        "labels_baseline": labels,
-        "labels_global": labels_new_list
-    }
-
-    # Add ground truth data if available
-    if labels_gt20 is not None:
-        comparison_input_dict["labels_gt20"] = labels_gt20
-        comparison_input_dict["colors_gt20"] = colors_gt20
-
-    if labels_gt200 is not None:
-        comparison_input_dict["labels_gt200"] = labels_gt200
-        comparison_input_dict["colors_gt200"] = colors_gt200
-
-    if points_gt is not None:
-        comparison_input_dict["coord_nyu"] = points_gt
-        comparison_input_dict["labels_nyu"] = labels_gt
-        comparison_input_dict["colors_nyu"] = colors_gt
-
-    # Save the comparison_input_dict
-    torch.save(comparison_input_dict, join(save_path, scene_name + "_comparisons_input.pth"))
+    # Get GT data for the scene from saved files
+    gt_path = join(gt_data_path, scene_name + "_gt.pth")
+    if os.path.exists(gt_path):
+        gt_dict = torch.load(gt_path)
+        coord_gt = gt_dict.get("coord", None)
+        labels_gt20 = gt_dict.get("labels_gt20", None)
+        colors_gt20 = gt_dict.get("colors_gt20", None)
+        labels_gt200 = gt_dict.get("labels_gt200", None)
+        colors_gt200 = gt_dict.get("colors_gt200", None)
+        labels_gt_instance = gt_dict.get("labels_gt_instance", None)
+        colors_gt_instance = gt_dict.get("colors_gt_instance", None)
+        labels_gt_nyu = gt_dict.get("labels_nyu", None)
+        colors_gt_nyu = gt_dict.get("colors_nyu", None)
+        print(f"GT data is loaded from {gt_path}")
+        del gt_dict
+        gc.collect()
 
     # Comparisons
 
     # Initialize an empty dictionary for storing the comparison results
     comparison_results_dict = {}
 
-    gt_methods = {"nyu40", "ScanNet20", "ScanNet200"}
+    #gt_methods = {"nyu40", "ScanNet20", "ScanNet200"}
+    gt_methods = {"ScanNet200"}
 
     for gt_method in gt_methods:
         if gt_method == "nyu40":
-            labels_gt_ = comparison_input_dict["labels_nyu"]
+            labels_gt_ = labels_gt_nyu
         elif gt_method == "ScanNet20":
-            labels_gt_ = comparison_input_dict["labels_gt20"]
+            labels_gt_ = labels_gt20
         elif gt_method == "ScanNet200":
-            labels_gt_ = comparison_input_dict["labels_gt200"]
+            labels_gt_ = labels_gt200
         else:
             print("GT method chosen is not available!!!")
             continue
         
-        baseline_metrics = compare_segmentation_output(comparison_input_dict["labels_baseline"], labels_gt_, method="baseline", gt=gt_method)
+        baseline_metrics = compare_segmentation_output(labels, labels_gt_, method="baseline", gt=gt_method)
         comparison_results_dict[f"{gt_method}_baseline"] = baseline_metrics
 
-        global_metrics_list = compare_segmentation_output(comparison_input_dict["labels_global"], labels_gt_, method="global", gt=gt_method)
+        global_metrics_list = compare_segmentation_output(labels_new_list, labels_gt_, method="global", gt=gt_method)
         for idx, global_metrics in enumerate(global_metrics_list):
             comparison_results_dict[f"{gt_method}_global_coeff_{idx}"] = global_metrics
 
     # Save the comparison_results_dict
+    print(f"Comparison results are ready to save {join(save_path, scene_name + "_comparisons_output.pth")}")
     torch.save(comparison_results_dict, join(save_path, scene_name + "_comparisons_output.pth"))
+    print(f"Comparison results are saved to {join(save_path, scene_name + "_comparisons_output.pth")}")
 
 
 def compare_segmentation_output(labels_list, labels_gt, method="baseline", gt="nyu40"):
@@ -987,7 +898,7 @@ def compare_segmentation_output(labels_list, labels_gt, method="baseline", gt="n
             plot_accuracy_metrics(metrics["recall_metrics"], scene_name + f"_{method}_vs_GT-{gt} for Recall")
             plot_accuracy_metrics(metrics["precision_metrics"], scene_name + f"_{method}_vs_GT-{gt} for Precision")
             plot_accuracy_metrics(metrics["f1_metrics"], scene_name + f"_{method}_vs_GT-{gt} for F1-score")
-        else:
+        
             print(f"Results for baseline (classic) one")
             print(f"Overall Accuracy: {metrics['accuracy_metrics']['overall']}")
             for group, accuracy in metrics['accuracy_metrics']['groupwise'].items():
@@ -1026,7 +937,7 @@ def compare_segmentation_output(labels_list, labels_gt, method="baseline", gt="n
                 plot_accuracy_metrics(metrics["recall_metrics"], scene_name + f"_{method}_{coefficients}_vs_GT-{gt} for Recall")
                 plot_accuracy_metrics(metrics["precision_metrics"], scene_name + f"_{method}_{coefficients}_vs_GT-{gt} for Precision")
                 plot_accuracy_metrics(metrics["f1_metrics"], scene_name + f"_{method}_{coefficients}_vs_GT-{gt} for F1-score")
-            else:
+            
                 print(f"Results for global one for coefficients {coefficients}")
                 print(f"Overall Accuracy: {metrics['accuracy_metrics']['overall']}")
                 for group, accuracy in metrics['accuracy_metrics']['groupwise'].items():
@@ -1060,7 +971,7 @@ def compare_segmentation_output(labels_list, labels_gt, method="baseline", gt="n
             plot_accuracy_metrics(metrics["recall_metrics"], scene_name + f"_{method}_vs_GT-{gt} for Recall")
             plot_accuracy_metrics(metrics["precision_metrics"], scene_name + f"_{method}_vs_GT-{gt} for Precision")
             plot_accuracy_metrics(metrics["f1_metrics"], scene_name + f"_{method}_vs_GT-{gt} for F1-score")
-        else:
+        
             print(f"Results for {method} one")
             print(f"Overall Accuracy: {metrics['accuracy_metrics']['overall']}")
             for group, accuracy in metrics['accuracy_metrics']['groupwise'].items():
@@ -1095,6 +1006,7 @@ def get_args():
     parser.add_argument('--sam_checkpoint_path', type=str, default='', help='the path of checkpoint for SAM')
     parser.add_argument('--scannetv2_train_path', type=str, default='scannet-preprocess/meta_data/scannetv2_train.txt', help='the path of scannetv2_train.txt')
     parser.add_argument('--scannetv2_val_path', type=str, default='scannet-preprocess/meta_data/scannetv2_val.txt', help='the path of scannetv2_val.txt')
+    parser.add_argument('--ablation_scenes_path', type=str, default='scannet-preprocess/meta_data/scannetv2_ablation.txt', help='the path of scannetv2_ablation.txt')
     parser.add_argument('--img_size', default=[640,480])
     parser.add_argument('--voxel_size', default=0.05)
     parser.add_argument('--th', default=50, help='threshold of ignoring small groups to avoid noise pixel')
@@ -1111,6 +1023,8 @@ if __name__ == '__main__':
         train_scenes = train_file.read().splitlines()
     with open(args.scannetv2_val_path) as val_file:
         val_scenes = val_file.read().splitlines()
+    with open(args.ablation_scenes_path) as abl_file:
+        abl_scenes = abl_file.read().splitlines()
     mask_generator = SamAutomaticMaskGenerator(build_sam(checkpoint=args.sam_checkpoint_path).to(device="cuda"))
     voxelize = Voxelize(voxel_size=args.voxel_size, mode="train", keys=("coord", "color", "group"))
     if not os.path.exists(args.save_path):
@@ -1118,4 +1032,4 @@ if __name__ == '__main__':
     scene_names = sorted(os.listdir(args.rgb_path))
     for scene_name in scene_names:
         seg_pcd(scene_name, args.rgb_path, args.data_path, args.save_path, mask_generator, args.voxel_size, 
-            voxelize, args.th, train_scenes, val_scenes, args.save_2dmask_path, args.gt_data_path)
+            voxelize, args.th, train_scenes, val_scenes, abl_scenes, args.save_2dmask_path, args.gt_data_path)
