@@ -624,6 +624,12 @@ def get_labels_from_colors(colors, gt_class="nyu40"):
             labels.append(-1)  # Unknown label
     return np.array(labels, dtype=np.int16)
 
+def generate_unique_color(existing_colors):
+    while True:
+        color = tuple(np.random.randint(0, 256, 3))
+        if color not in existing_colors:
+            return color
+
 ############################# Evaluation Metrics #########################################################
 
 ## Accuracy Score
@@ -687,11 +693,11 @@ def calculate_segmentation_accuracy_iou(predicted_labels, ground_truth_labels):
         
     # Calculate overall accuracy
     overall_accuracy = accuracy_score(ground_truth_groups, remapped_predicted_groups)
-    print("ground_truth_groups: ", ground_truth_groups)
-    print("remapped_predicted_groups: ", remapped_predicted_groups)
+    #print("ground_truth_groups: ", ground_truth_groups)
+    #print("remapped_predicted_groups: ", remapped_predicted_groups)
 
-    print("ground_truth_groups uniques: ", set(ground_truth_groups))
-    print("remapped_predicted_groups uniques: ", set(remapped_predicted_groups))
+    #print("ground_truth_groups uniques: ", set(ground_truth_groups))
+    #print("remapped_predicted_groups uniques: ", set(remapped_predicted_groups))
     
     # Calculate group-wise accuracy
     group_accuracy = {}
