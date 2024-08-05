@@ -37,6 +37,7 @@ from scipy.cluster.hierarchy import linkage, fcluster
 from scipy.spatial.distance import squareform
 
 import gc
+import math
 
 verbose = False # To print out intermediate data
 verbose_graph = False # To plot correspondence graphs before and after optimization
@@ -172,6 +173,7 @@ def cal_group(input_dict, new_input_dict, match_inds, ratio=0.5):
     unique_groups, group_0_counts = np.unique(group_0, return_counts=True)
     group_0_counts = dict(zip(unique_groups, group_0_counts))
     unique_groups, group_1_counts = np.unique(group_1, return_counts=True)
+    print(f"unique_groups in: {unique_groups}")
     group_1_counts = dict(zip(unique_groups, group_1_counts))
 
     # Calculate the group number correspondence of overlapping points
@@ -200,6 +202,7 @@ def cal_group(input_dict, new_input_dict, match_inds, ratio=0.5):
         # print(count / total_count)
         if count / total_count >= ratio:
             group_1[group_1 == group_i] = group_j
+    print(f"unique_groups out: {np.unique(group_1)}")
     return group_1
 
 def normalized_feature_difference(f_i, f_j):
@@ -332,7 +335,7 @@ def cal_graph(input_dict, new_input_dict, match_inds, coefficient_combinations=[
             (view_name_j, group_j), 
             **edge_data
         )
-        #print(f"key: {key} and count: {count}")
+        #print(f"key: {key} and count: {count} and cost: {edge_data['cost']}")
 
     return correspondence_graph, input_dict, new_input_dict
 
@@ -402,7 +405,7 @@ def cal_2_scenes(pcd_list, index, voxel_size, voxelize, th=50):
     pcd_dict = voxelize(pcd_dict)
     return pcd_dict
 
-def update_groups_and_merge_dictionaries(pcd_list_, merged_graph_min):
+def update_groups_and_merge_dictionaries(pcd_list_, merged_graph_min, merged_nodes):
     # Create a mapping for final groups to ensure all connected nodes have the same group
     final_group_map = {}
     
@@ -453,13 +456,33 @@ def update_groups_and_merge_dictionaries(pcd_list_, merged_graph_min):
         new_groups = []
         for mask_id in mask_ids:
             if (viewpoint_name, mask_id) in final_group_map:
+                #print(f"mask_id: {mask_id}, mapping: {final_group_map[(viewpoint_name, mask_id)]}")
                 new_groups.append(final_group_map[(viewpoint_name, mask_id)])
             else:
-                new_groups.append(mask_id)
+                # Check if it is in merged_nodes to find the representative node
+                if (viewpoint_name, mask_id) in merged_nodes:
+                    representative = merged_nodes[(viewpoint_name, mask_id)]
+                    if representative in final_group_map:
+                        new_groups.append(final_group_map[representative])
+                    else:
+                        print(f"Error: Representative {representative} not found in final_group_map.")
+                        new_groups.append(mask_id)  # Fallback to original mask_id
+                else:
+                    print(f"merged_nodes: {merged_nodes}")
+                    print("(viewpoint_name, mask_id): ", (viewpoint_name, mask_id))
+                    print("final_group_map: ", final_group_map)
+                    new_groups.append(mask_id)
         
         all_coords.append(pcd["coord"])
         all_colors.append(pcd["color"])
         all_groups.append(new_groups)
+    
+    print("All colors: ", len(np.concatenate(all_coords, axis=0)))
+    print("All colors: ", len(np.concatenate(all_colors, axis=0)))
+    print("All groups: ", len(np.concatenate(all_groups, axis=0)))
+
+    #unique_groups = {tuple(group) for group in all_groups}
+    print(f"Unique groups {set(np.concatenate(all_groups, axis=0))} length: {len(set(np.concatenate(all_groups, axis=0)))}")
     
     # Combine all data into a single dictionary
     pcd_dict = {
@@ -467,7 +490,7 @@ def update_groups_and_merge_dictionaries(pcd_list_, merged_graph_min):
         "color": np.concatenate(all_colors, axis=0),
         "group": np.concatenate(all_groups, axis=0)
     }
-
+    print(f"number of groups: {grp_cnt}")
     return voxelize(pcd_dict)
 
 # Focus on this function for global mask_ID solution
@@ -596,8 +619,9 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
         coefficients_range = np.arange(0, 1.01, step_size)
 
         # Generate all possible combinations of lambda values and filter those that sum to 1
-        valid_combinations = [list(combination) for combination in itertools.product(coefficients_range, repeat=4) if sum(combination) == 1]
-        valid_combinations = [[0.25, 0.25, 0.25, 0.25]] + valid_combinations
+        #valid_combinations = [list(combination) for combination in itertools.product(coefficients_range, repeat=4) if sum(combination) == 1]
+        #valid_combinations = [[0.25, 0.25, 0.25, 0.25]] + valid_combinations
+        valid_combinations = [[0.0, 0.0, 0.0, 1.0]]
 
         print(f"Number of valid combinations: {len(valid_combinations)}")
 
@@ -609,6 +633,7 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
             corr_graph, pcd_list_ = cal_scenes(pcd_list_, indice, voxel_size=voxel_size, voxelize=voxelize_new, coefficient_combinations=valid_combinations) 
             if len(corr_graph.nodes) > 0 and len(corr_graph.edges) > 0:
                 merged_graph = nx.compose(merged_graph, corr_graph)
+                #print(f"Num nodes: {len(merged_graph.nodes)}, nodes are : {merged_graph.nodes}")
             del corr_graph
             gc.collect()
 
@@ -656,8 +681,8 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
             del condensed_cost_matrix
             gc.collect()
 
-            # Set a threshold to determine clusters (tune this threshold based on the data)
-            threshold = 0.2
+            '''# Set a threshold to determine clusters (tune this threshold based on the data)
+            threshold = 0.5 # 0.2
             clusters = fcluster(Z, t=threshold, criterion='distance')
 
             node_to_cluster = {node: cluster for node, cluster in zip(node_list, clusters)}
@@ -695,8 +720,54 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
                             'viewpoint_id_0': data['viewpoint_id_0'],
                             'viewpoint_id_1': data['viewpoint_id_1']
                         }
-                        merged_graph_min.add_edge(v_pos, w_pos, **edge_data)
+                        print(f"edge_data['cost']: {edge_data['cost']}")
+                        merged_graph_min.add_edge(v_pos, w_pos, **edge_data)'''
+            
+            # Set a threshold to determine clusters (tune this threshold based on the data)
+            threshold = 0.5  # 0.2
+            clusters = fcluster(Z, t=threshold, criterion='distance')
 
+            # Map each node to its corresponding cluster
+            node_to_cluster = {node: cluster for node, cluster in zip(node_list, clusters)}
+
+            # Create a mapping of merged nodes
+            merged_nodes = {}
+            for cluster in set(clusters):
+                cluster_nodes = [node for node, c in node_to_cluster.items() if c == cluster]
+                representative = cluster_nodes[0]
+                for node in cluster_nodes:
+                    if node != representative:
+                        merged_nodes[node] = representative
+
+            # Merge clusters and update the graph
+            merged_graph_min = nx.DiGraph()
+
+            # Add all nodes (original and merged) to the new graph
+            for node in merged_graph.nodes():
+                # Add the representative node (if exists) or the original node itself
+                representative = merged_nodes.get(node, node)
+                if not merged_graph_min.has_node(representative):
+                    merged_graph_min.add_node(representative)
+
+            # Add edges to the new graph if they meet the threshold
+            for u, v, data in merged_graph.edges(data=True):
+                u_rep = merged_nodes.get(u, u)
+                v_rep = merged_nodes.get(v, v)
+
+                # Ensure that the edge meets the threshold condition and connects different representatives
+                if u_rep != v_rep and data['cost'].get(tuple(coefficients), large_value) <= threshold:
+                    if not merged_graph_min.has_edge(u_rep, v_rep):
+                        edge_data = {
+                            'count_common': data['count_common'],
+                            'count_total': data['count_total'],
+                            'cost': data['cost'].get(tuple(coefficients), large_value),
+                            'viewpoint_id_0': data['viewpoint_id_0'],
+                            'viewpoint_id_1': data['viewpoint_id_1']
+                        }
+                        print(f"edge_data['cost']: {edge_data['cost']}")
+                        merged_graph_min.add_edge(u_rep, v_rep, **edge_data)
+
+            #print(f"Num nodes: {len(merged_graph_min.nodes)}, nodes are : {merged_graph_min.nodes} for minimized graph")
             # Store the result for this coefficient combination
             merged_graphs[tuple(coefficients)] = merged_graph_min
 
@@ -713,7 +784,7 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
                 for edge in graph.edges(data=True):
                     print(edge)'''
 
-            pcd_dict_merged_ = update_groups_and_merge_dictionaries(pcd_list_, merged_graph_min)
+            pcd_dict_merged_ = update_groups_and_merge_dictionaries(pcd_list_, merged_graph_min, merged_nodes)
             merged_dicts[tuple(coefficients)] = pcd_dict_merged_
 
             if verbose_graph:
@@ -739,7 +810,9 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
     # Step 3 in pipeline: Region Merging Method
     # Stage 1: Run i = 0 case once
     seg_dict = pcd_list[0]
+    print(f'Unique groups baseline: {set(seg_dict["group"])}')
     seg_dict["group"] = num_to_natural(remove_small_group(seg_dict["group"], th))
+    print(f'Unique groups baseline: {set(seg_dict["group"])}')
 
     if scene_name in train_scenes:
         scene_path = join(data_path, "train", scene_name + ".pth")
@@ -761,7 +834,10 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
     group[mask_dis] = -1
     group = group.astype(np.int16)
     labels = np.array(group)
+    print(f"Unique groups baseline: {set(labels)}")
     coord_ = data_dict.get("coord", None)
+
+    torch.save(num_to_natural(group), join(save_path, scene_name + "_baseline.pth"))
 
     # Stage 2: Iterate over the merged_dicts for the i = 1 case
     labels_new_list = []
@@ -770,7 +846,9 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
         print(f"\nProcessing for coefficients {coefficients}:")
 
         seg_dict = pcd_dict_merged_
+        print(f'Unique groups global: {set(seg_dict["group"])}')
         seg_dict["group"] = num_to_natural(remove_small_group(seg_dict["group"], th))
+        print(f'Unique groups global: {set(seg_dict["group"])}')
 
         gen_coord = torch.tensor(seg_dict["coord"]).cuda().contiguous().float()
         gen_group = seg_dict["group"]
@@ -781,6 +859,8 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
         group[mask_dis] = -1
         group = group.astype(np.int16)
         labels_new = np.array(group)
+        print(f"Unique groups global: {set(labels_new)}")
+        torch.save(num_to_natural(group), join(save_path, scene_name + "_global.pth"))
 
         # Store labels_new in the list
         labels_new_list.append((coefficients, labels_new))
@@ -833,10 +913,37 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
         for idx, global_metrics in enumerate(global_metrics_list):
             comparison_results_dict[f"{gt_method}_global_coeff_{idx}"] = global_metrics
 
+    
+    num_parts = 6
+    total_items = len(comparison_results_dict)
+    part_size = math.ceil(total_items / num_parts)
+
+    # Split the dictionary and save each part
+    keys_list = list(comparison_results_dict.keys())
+
+    for part_num in range(num_parts):
+        # Get the range of keys for this part
+        start_idx = part_num * part_size
+        end_idx = start_idx + part_size
+
+        # Slice the keys list to get the keys for this part
+        part_keys = keys_list[start_idx:end_idx]
+        
+        # Create a dictionary for this part
+        part_dict = {key: comparison_results_dict[key] for key in part_keys}
+        
+        # Save this part dictionary
+        part_path = join(save_path, f"{scene_name}_comparisons_output_part{part_num + 1}.pth")
+
+        print(f"A part of comparison results is ready to save {part_path}")
+        torch.save(part_dict, part_path)
+        print(f"Comparison results part {part_num + 1} saved to {part_path}")
+
     # Save the comparison_results_dict
-    print(f"Comparison results are ready to save {join(save_path, scene_name + "_comparisons_output.pth")}")
-    torch.save(comparison_results_dict, join(save_path, scene_name + "_comparisons_output.pth"))
-    print(f"Comparison results are saved to {join(save_path, scene_name + "_comparisons_output.pth")}")
+    #path = join(save_path, scene_name + "_comparisons_output.pth")
+    #print(f"Comparison results are ready to save {path}")
+    #torch.save(comparison_results_dict, join(save_path, scene_name + "_comparisons_output.pth"))
+    #print(f"Comparison results are saved to {path}")
 
 
 def compare_segmentation_output(labels_list, labels_gt, method="baseline", gt="nyu40"):
