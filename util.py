@@ -650,6 +650,11 @@ def calculate_segmentation_accuracy_iou(predicted_labels, ground_truth_labels):
     predicted_groups = predicted_labels.flatten()
     ground_truth_groups = ground_truth_labels.flatten()
 
+    # Filter out -1 labels from both predicted and ground truth groups
+    valid_indices = (predicted_groups != -1) & (ground_truth_groups != -1)
+    predicted_groups = predicted_groups[valid_indices]
+    ground_truth_groups = ground_truth_groups[valid_indices]
+
     # Get unique labels
     unique_pred = np.unique(predicted_groups)
     unique_gt = np.unique(ground_truth_groups)
