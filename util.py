@@ -634,13 +634,14 @@ def generate_unique_color(existing_colors):
 
 ## Accuracy Score
 # How to call: accuracy_metrics = calculate_segmentation_accuracy_iou(predicted_labels, ground_truth_labels)
-def calculate_segmentation_accuracy_iou(predicted_labels, ground_truth_labels):
+def calculate_segmentation_accuracy_iou(predicted_labels, ground_truth_labels, ground_truth_labels_semantic):
     """
     Calculate the segmentation accuracy metrics based on IoU.
     
     Parameters:
         predicted_labels (np.ndarray): Predicted group labels.
-        ground_truth_labels (np.ndarray): Ground truth group labels.
+        ground_truth_labels (np.ndarray): Ground truth instance group labels.
+        ground_truth_labels_semantic (np.ndarray): Ground truth semantic class labels.
     
     Returns:
         dict: Dictionary containing overall accuracy and instance-wise accuracy.
@@ -649,11 +650,13 @@ def calculate_segmentation_accuracy_iou(predicted_labels, ground_truth_labels):
     # Flatten the group arrays
     predicted_groups = predicted_labels.flatten()
     ground_truth_groups = ground_truth_labels.flatten()
+    ground_truth_groups_semantic = ground_truth_labels_semantic.flatten()
 
     # Filter out -1 labels from both predicted and ground truth groups
     valid_indices = (predicted_groups != -1) & (ground_truth_groups != -1)
     predicted_groups = predicted_groups[valid_indices]
     ground_truth_groups = ground_truth_groups[valid_indices]
+    ground_truth_groups_semantic = ground_truth_groups_semantic[valid_indices]
 
     # Get unique labels
     unique_pred = np.unique(predicted_groups)
@@ -717,6 +720,7 @@ def calculate_segmentation_accuracy_iou(predicted_labels, ground_truth_labels):
         "overall": overall_accuracy,
         "groupwise": group_accuracy,
         "ground_truth_groups": ground_truth_groups,
+        "ground_truth_classes_semantic": ground_truth_groups_semantic,
         "remapped_predicted_groups": remapped_predicted_groups
     }
 
@@ -756,27 +760,72 @@ def compute_iou(predictions, ground_truth):
     return iou_dict, miou
 
 ## Panoptic Quality
-# How to call: pq_dict, overall_pq = compute_pq(predictions, ground_truth)
-def compute_pq(predictions, ground_truth):
-    # Get unique classes from both predictions and ground truth
-    unique_classes = np.unique(ground_truth)
+# How to call: pq_dict, overall_pq = compute_pq(predictions, ground_truth, ground_truth_semantic)
+def compute_pq(remapped_predicted_groups, ground_truth_groups, ground_truth_classes_semantic):
+    unique_classes = np.unique(ground_truth_classes_semantic)
     
     pq_dict = {}
-    tp, fp, fn = 0, 0, 0
-    for cls in unique_classes:
-        pred_mask = (predictions == cls)
-        gt_mask = (ground_truth == cls)
-        cls_tp = np.sum(np.logical_and(pred_mask, gt_mask))
-        cls_fp = np.sum(np.logical_and(pred_mask, np.logical_not(gt_mask)))
-        cls_fn = np.sum(np.logical_and(np.logical_not(pred_mask), gt_mask))
-        cls_pq = cls_tp / (cls_tp + 0.5 * (cls_fp + cls_fn)) if (cls_tp + cls_fp + cls_fn) > 0 else 0
-        pq_dict[cls] = cls_pq
-        
-        tp += cls_tp
-        fp += cls_fp
-        fn += cls_fn
+    pq_sum = 0
+    valid_class_count = 0
     
-    overall_pq = tp / (tp + 0.5 * (fp + fn)) if (tp + fp + fn) > 0 else 0
+    for cls in unique_classes:
+        if cls == -1:  # skip unknown
+            continue
+        
+        # Mask for the current class in the ground truth
+        gt_semantic_mask = (ground_truth_classes_semantic == cls)
+        
+        # Extract the instances for the current class
+        gt_instances_class = np.where(gt_semantic_mask, ground_truth_groups, 0)
+        pred_instances_class = np.where(gt_semantic_mask, remapped_predicted_groups, 0)
+        
+        matched_pairs = []
+        matched_gt_ids = set()
+        matched_pred_ids = set()
+        
+        for pred_id in np.unique(pred_instances_class):
+            if pred_id == -1:  # skip unknown
+                continue
+                
+            pred_mask = (pred_instances_class == pred_id)
+            best_iou = 0
+            best_gt_id = None
+            
+            for gt_id in np.unique(gt_instances_class):
+                if gt_id == -1 or gt_id in matched_gt_ids:
+                    continue
+                    
+                gt_mask = (gt_instances_class == gt_id)
+                intersection = np.logical_and(pred_mask, gt_mask).sum()
+                union = np.logical_or(pred_mask, gt_mask).sum()
+                iou = intersection / union if union > 0 else 0
+                
+                if iou > best_iou:
+                    best_iou = iou
+                    best_gt_id = gt_id
+            
+            if best_iou > 0:
+                matched_pairs.append((pred_id, best_gt_id, best_iou))
+                matched_gt_ids.add(best_gt_id)
+                matched_pred_ids.add(pred_id)
+        
+        tp = len(matched_pairs)
+        fp = len(np.unique(pred_instances_class)) - len(matched_pred_ids)  # corrected
+        fn = len(np.unique(gt_instances_class)) - len(matched_gt_ids)  # corrected
+        
+        if tp > 0:
+            pq_sum_class = sum([iou for _, _, iou in matched_pairs])
+            pq_cls = pq_sum_class / (tp + 0.5 * (fp + fn))
+        else:
+            pq_cls = 0
+        
+        pq_dict[cls] = pq_cls
+        pq_sum += pq_cls
+        valid_class_count += 1
+    
+    # Calculate the overall PQ as the average of class-wise PQs
+    overall_pq = pq_sum / valid_class_count if valid_class_count > 0 else 0
+    
     return pq_dict, overall_pq
 
 ## precision, recall and F1 metric

@@ -1,11 +1,11 @@
 """
-Main Script
+Main Script for Ablation Studies
 
 Author: Yunhan Yang (yhyang.myron@gmail.com)
 
 Updated by
-Abdurrahman Yilmaz (ayilmaz@lincoln.ac.uk) v06
-22 Jul 2024
+Abdurrahman Yilmaz (ayilmaz@lincoln.ac.uk) v07
+10 Aug 2024
 """
 
 import os

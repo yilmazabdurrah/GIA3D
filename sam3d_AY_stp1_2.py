@@ -1,13 +1,11 @@
 """
-Main Script
+Main Script (Just step 1 and 2 for single run to save data)
 
 Author: Yunhan Yang (yhyang.myron@gmail.com)
 
 Updated by
 Abdurrahman Yilmaz (ayilmaz@lincoln.ac.uk) v06
 22 Jul 2024
-
-Just step 1 and 2 for single run to save data
 """
 
 import os

@@ -4,8 +4,8 @@ Main Script
 Author: Yunhan Yang (yhyang.myron@gmail.com)
 
 Updated by
-Abdurrahman Yilmaz (ayilmaz@lincoln.ac.uk) v06
-22 Jul 2024
+Abdurrahman Yilmaz (ayilmaz@lincoln.ac.uk) v07
+10 Aug 2024
 """
 
 import os
@@ -18,6 +18,8 @@ import multiprocessing as mp
 import pointops
 import random
 import argparse
+
+import itertools
 
 import pickle
 
@@ -34,9 +36,17 @@ import matplotlib.pyplot as plt
 from scipy.cluster.hierarchy import linkage, fcluster
 from scipy.spatial.distance import squareform
 
+import gc
+import math
+
 verbose = False # To print out intermediate data
 verbose_graph = False # To plot correspondence graphs before and after optimization
-verbose_comparisons = True # To plot comparison output
+verbose_comparisons = False # To plot comparison output
+
+maxVal = 0
+maxVal_stab = 0
+maxVal_pred = 0
+maxVal_iou = 0
 
 def pcd_ensemble(org_path, new_path, data_path, vis_path):
     new_pcd = torch.load(new_path)
@@ -168,6 +178,7 @@ def cal_group(input_dict, new_input_dict, match_inds, ratio=0.5):
     unique_groups, group_0_counts = np.unique(group_0, return_counts=True)
     group_0_counts = dict(zip(unique_groups, group_0_counts))
     unique_groups, group_1_counts = np.unique(group_1, return_counts=True)
+    print(f"unique_groups in: {unique_groups}")
     group_1_counts = dict(zip(unique_groups, group_1_counts))
 
     # Calculate the group number correspondence of overlapping points
@@ -196,6 +207,7 @@ def cal_group(input_dict, new_input_dict, match_inds, ratio=0.5):
         # print(count / total_count)
         if count / total_count >= ratio:
             group_1[group_1 == group_i] = group_j
+    print(f"unique_groups out: {np.unique(group_1)}")
     return group_1
 
 def normalized_feature_difference(f_i, f_j):
@@ -206,12 +218,12 @@ def normalized_feature_difference(f_i, f_j):
     return normalized_difference
 
 # Mask ID correspondence between all frames
-def cal_graph(input_dict, new_input_dict, match_inds, coefficients=[0.25, 0.25, 0.25, 0.25]):
+def cal_graph(input_dict, new_input_dict, match_inds, coefficient_combinations=[[0.25, 0.25, 0.25, 0.25]]):
 
-    L1 = coefficients[0]
-    L2 = coefficients[0]
-    L3 = coefficients[0]
-    L4 = coefficients[0]
+    global maxVal
+    global maxVal_stab
+    global maxVal_pred
+    global maxVal_iou
 
     group_0 = input_dict["group"]
     group_1 = new_input_dict["group"]
@@ -222,9 +234,6 @@ def cal_graph(input_dict, new_input_dict, match_inds, coefficients=[0.25, 0.25, 
     view_names_0 = input_dict["viewpoint_name"]
     view_names_1 = new_input_dict["viewpoint_name"]
 
-    unique_nodes_0 = list(set(zip(view_names_0, group_0)))
-    unique_nodes_1 = list(set(zip(view_names_1, group_1)))
-
     features_0 = input_dict["feature"]
     features_1 = new_input_dict["feature"]
     stability_scores_0 = input_dict["stability_score"]
@@ -232,12 +241,21 @@ def cal_graph(input_dict, new_input_dict, match_inds, coefficients=[0.25, 0.25, 
     predicted_ious_0 = input_dict["predicted_iou"]
     predicted_ious_1 = new_input_dict["predicted_iou"]
 
+    unique_nodes_0 = list(set(zip(view_names_0, group_0)))
+    unique_nodes_1 = list(set(zip(view_names_1, group_1)))
+
+    # Initialize the graph
+    correspondence_graph = nx.DiGraph()   
+
+    for node in unique_nodes_0:
+        correspondence_graph.add_node(node)
+    for node in unique_nodes_1:
+        correspondence_graph.add_node(node)
+
     # Calculate the group number correspondence of overlapping points
-    group_overlap = {}
     point_cnt_group_0 = {}
     point_cnt_group_1 = {}
-    cost = {}
-
+    
     unique_values_group_0 = set(group_0)
 
     for unique_value in unique_values_group_0:
@@ -250,6 +268,9 @@ def cal_graph(input_dict, new_input_dict, match_inds, coefficients=[0.25, 0.25, 
 
     #print("Counts for group 0 ", point_cnt_group_0)
     #print("Counts for group 1 ", point_cnt_group_1)
+
+    cost = {}
+    group_overlap = {}
 
     for i, j in match_inds:
         group_i = group_1[i]
@@ -270,14 +291,35 @@ def cal_graph(input_dict, new_input_dict, match_inds, coefficients=[0.25, 0.25, 
         predicted_iou_i = predicted_ious_1[i]
         predicted_iou_j = predicted_ious_0[j]
 
-        '''if group_i == -1:
+        if group_i == -1 or group_j == -1:
+            continue
+        '''if group_i == -1 and group_j == -1:
+            continue
+        elif group_i == -1:
+            group_1[i] = group_j
+            new_input_dict["group"][i] = group_j
+            point_cnt_group_1[group_j] = point_cnt_group_1.get(group_j, 0) + 1
+            group_i = group_j
+            correspondence_graph.add_node((view_name_i, group_j))
+        # If group_j is -1, skip this match
+        elif group_j == -1:
+            continue
+        elif group_i == -1:
+            new_input_dict["group"][i] = group_0[j]
+            group_1[i] = group_0[j]
+            print("point_cnt_group_1: ", point_cnt_group_1)
+            point_cnt_group_1[group_j] = point_cnt_group_1[group_i]
+            print("point_cnt_group_1: ", point_cnt_group_1)
+            #del point_cnt_group_1[group_i]
+            group_i = group_j
+
+        if group_i == -1:
             group_1[i] = group_0[j]
             continue
         if group_j == -1:
             continue'''
         
-        if group_i == -1 or group_j == -1:
-            continue
+        
         '''elif group_i == -1:
             group_1[i] = group_0[j]
             group_i = group_j
@@ -287,53 +329,60 @@ def cal_graph(input_dict, new_input_dict, match_inds, coefficients=[0.25, 0.25, 
         #print("overlap_key: ", overlap_key, " and features: ", feature_i, feature_j)
         if overlap_key not in group_overlap:
             group_overlap[overlap_key] = 0
-            cost[overlap_key] = 0
+            cost[overlap_key] = {tuple(coefficients): 0 for coefficients in coefficient_combinations}
         group_overlap[overlap_key] += 1
         '''if group_i == -1 and group_j == -1:
             cost[overlap_key] += 3
         elif group_i == -1 or group_j == -1:
             continue
         else:'''
-        cost[overlap_key] += L1*normalized_feature_difference(feature_i,feature_j) + L2*abs(stability_score_i - stability_score_j) + L3*abs(predicted_iou_i - predicted_iou_j)
 
-    #print("cost: ", cost)
+        for coefficients in coefficient_combinations:
+            L1, L2, L3, _ = coefficients
+            fd = normalized_feature_difference(feature_i,feature_j)
+            ss = abs(stability_score_i - stability_score_j)
+            if ss > 0.5:
+                ss = 0.0
+            piou = abs(predicted_iou_i - predicted_iou_j)
+            if piou > 0.5:
+                piou = 0.0
+            
+            cost[overlap_key][tuple(coefficients)] += L1*fd + L2*ss + L3*piou
 
-    # Initialize the graph
-    correspondence_graph = nx.DiGraph()   
-
-    for node in unique_nodes_0:
-        correspondence_graph.add_node(node)
-    for node in unique_nodes_1:
-        correspondence_graph.add_node(node)
-
-    # Add edges based on group_overlap
-    #print(f"length of group overlap: {len(group_overlap.items())}")
+    # Add edges with costs for all coefficient combinations
     for key, count in group_overlap.items():
         group_i, view_id_i, view_name_i, point_cnt_group_i, group_j, view_id_j, view_name_j, point_cnt_group_j = key
-        cost[key] /= count
-        cost[key] += L4*max(0,(1 - count/min(point_cnt_group_i,point_cnt_group_j)))
-        #cost[(group_i, view_id_i, view_name_i, point_cnt_group_i, group_j, view_id_j, view_name_j, point_cnt_group_j)] /= 4 # divide the number of components in cost function
+        edge_data = {
+            'count_common': count,
+            'count_total': [point_cnt_group_i, point_cnt_group_j],
+            'viewpoint_id_0': view_id_j,
+            'viewpoint_id_1': view_id_i,
+            'cost': {}
+        }
+
+        for coefficients in coefficient_combinations:
+            _, _, _, L4 = coefficients
+            
+            cost_value = cost[key][tuple(coefficients)] / count + L4 * max(0, (1 - count / min(point_cnt_group_i, point_cnt_group_j)))
+            edge_data['cost'][tuple(coefficients)] = cost_value
+
         correspondence_graph.add_edge(
-                (view_name_i, group_i), 
-                (view_name_j, group_j), 
-                count_common=count,
-                count_total=[point_cnt_group_i,point_cnt_group_j],
-                cost = cost[key],
-                viewpoint_id_0=view_id_j, 
-                viewpoint_id_1=view_id_i
-            )
-        #print(f"key: {key} and count: {count}")
+            (view_name_i, group_i), 
+            (view_name_j, group_j), 
+            **edge_data
+        )
+        #print(f"key: {key} and count: {count} and cost: {edge_data['cost']}")
 
     return correspondence_graph, input_dict, new_input_dict
 
-def cal_scenes(pcd_list, index, voxel_size, voxelize, th=50, coefficients=[0.25, 0.25, 0.25, 0.25]):
+def cal_scenes(pcd_list, index, voxel_size, voxelize, th=50, coefficient_combinations=[[0.25, 0.25, 0.25, 0.25]]):
     #print(index, flush=True)
     input_dict_0 = pcd_list[index]
     input_dict_1 = {}
     pcd0 = make_open3d_point_cloud(input_dict_0, voxelize, th)
     merged_graph = nx.DiGraph()
     for i, pcd_dict in enumerate(pcd_list):
-        if i > index: # i != index:
+        if i != index: # i > index
             input_dict_1.update(pcd_dict)
             pcd1 = make_open3d_point_cloud(input_dict_1, voxelize, th)
             if pcd0 == None:
@@ -349,7 +398,7 @@ def cal_scenes(pcd_list, index, voxel_size, voxelize, th=50, coefficients=[0.25,
             # Cal Dul-overlap
             match_inds = get_matching_indices(pcd1, pcd0, 1.5 * voxel_size, 1)
             if match_inds:
-                correspondence_graph, input_dict_0, input_dict_1 = cal_graph(input_dict_0, input_dict_1, match_inds, coefficients)
+                correspondence_graph, input_dict_0, input_dict_1 = cal_graph(input_dict_0, input_dict_1, match_inds, coefficient_combinations)
                 pcd_list[i].update(input_dict_1)
                 pcd_list[index].update(input_dict_0)
                 if len(correspondence_graph.nodes) > 0 and len(correspondence_graph.edges) > 0:
@@ -392,6 +441,7 @@ def cal_2_scenes(pcd_list, index, voxel_size, voxelize, th=50):
     pcd_dict = voxelize(pcd_dict)
     return pcd_dict
 
+#def update_groups_and_merge_dictionaries(pcd_list_, merged_graph_min, merged_nodes):
 def update_groups_and_merge_dictionaries(pcd_list_, merged_graph_min):
     # Create a mapping for final groups to ensure all connected nodes have the same group
     final_group_map = {}
@@ -429,6 +479,9 @@ def update_groups_and_merge_dictionaries(pcd_list_, merged_graph_min):
             else:
                 final_group_map[node] = -1
 
+    #print(f"The number of nodes {len(merged_graph_min.nodes())}")
+    #print(f"The number of groups in the map {len(final_group_map)}")
+
     # Initialize empty lists for concatenated data
     all_coords = []
     all_colors = []
@@ -441,15 +494,26 @@ def update_groups_and_merge_dictionaries(pcd_list_, merged_graph_min):
         
         # Create a mapping from old mask ids to new group ids
         new_groups = []
+        cnt = 0
         for mask_id in mask_ids:
             if (viewpoint_name, mask_id) in final_group_map:
+                #print(f"mask_id: {mask_id}, mapping: {final_group_map[(viewpoint_name, mask_id)]}")
                 new_groups.append(final_group_map[(viewpoint_name, mask_id)])
             else:
-                new_groups.append(mask_id)
+                new_groups.append(-1)
+                cnt+=1
+                print(f"Not in dictionary {cnt}")
         
         all_coords.append(pcd["coord"])
         all_colors.append(pcd["color"])
         all_groups.append(new_groups)
+    
+    #print("All colors: ", len(np.concatenate(all_coords, axis=0)))
+    #print("All colors: ", len(np.concatenate(all_colors, axis=0)))
+    #print("All groups: ", len(np.concatenate(all_groups, axis=0)))
+
+    #unique_groups = {tuple(group) for group in all_groups}
+    #print(f"Unique groups {set(np.concatenate(all_groups, axis=0))} length: {len(set(np.concatenate(all_groups, axis=0)))}")
     
     # Combine all data into a single dictionary
     pcd_dict = {
@@ -457,13 +521,14 @@ def update_groups_and_merge_dictionaries(pcd_list_, merged_graph_min):
         "color": np.concatenate(all_colors, axis=0),
         "group": np.concatenate(all_groups, axis=0)
     }
-
+    #print(f"number of groups: {grp_cnt}")
     return voxelize(pcd_dict)
 
 # Focus on this function for global mask_ID solution
 def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_size, voxelize, th, train_scenes, val_scenes, save_2dmask_path, gt_data_path):
-    print(scene_name, flush=True)
     
+    print(scene_name, flush=True)
+
     if scene_name in train_scenes:
         scene_path = join(data_path, "train", scene_name + ".pth")
     elif scene_name in val_scenes:
@@ -474,12 +539,12 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
 
     #print("Available keys:", data_dict.keys())
 
-    if os.path.exists(join(save_path, scene_name + ".pth")):
+    if os.path.exists(join(save_path, scene_name + "_comparisons_output_part1.pth")):
         return
 
     # Step 1 in pipeline: SAM Generate Masks
 
-    step1_output_path = os.path.join(save_path, scene_name + "_step1.pth")
+    step1_output_path = os.path.join(save_2dmask_path, scene_name + "_step1.pth")
 
     # Returns the names of the multi-images in the scene
     color_names = sorted(os.listdir(os.path.join(rgb_path, scene_name, 'color')), key=lambda a: int(os.path.basename(a).split('.')[0]))
@@ -577,229 +642,385 @@ def seg_pcd(scene_name, rgb_path, data_path, save_path, mask_generator, voxel_si
             group_index[group_index != -1] += group_index_last.max() + 1
             pcd_list_[index]["group"] = group_index
 
+        threshold_to_coefficients = {
+            0.25: [0.092, 0.082, 0.081, 0.745],
+            0.3: [0.07, 0.057, 0.063, 0.811],
+            0.35: [0.038, 0.029, 0.029, 0.904],
+            0.4: [0.027, 0.027, 0.027, 0.919],
+            0.45: [0.042, 0.042, 0.042, 0.875],
+            0.5: [0.038, 0.038, 0.038, 0.888],
+            0.55: [0.012, 0.012, 0.012, 0.962]
+        }
+
+        combinations_th = [0.3]
+
+        print(f"Number of valid combinations for thresholds: {len(combinations_th)}")
+
+        coefficients = [threshold_to_coefficients[th] for th in combinations_th]
+
+        print(f"Number of valid combinations for coefficients: {len(coefficients)}")
+
         merged_graph = nx.DiGraph()
-        #print(f"Number of scenes: {len(pcd_list_)}")
+        print(f"Number of scenes: {len(pcd_list_)}")
+        num_scene = len(pcd_list_) - 1
         for indice in range(len(pcd_list_)):
-            #print(f"Current indice: {indice}")
-            corr_graph, pcd_list_ = cal_scenes(pcd_list_, indice, voxel_size=voxel_size, voxelize=voxelize_new) 
+            print(f"Current scene: {indice}/{num_scene}")
+            corr_graph, pcd_list_ = cal_scenes(pcd_list_, indice, voxel_size=voxel_size, voxelize=voxelize_new, coefficient_combinations=coefficients) 
             if len(corr_graph.nodes) > 0 and len(corr_graph.edges) > 0:
                 merged_graph = nx.compose(merged_graph, corr_graph)
-                #print(corr_graph.edges(data=True))
-        #print(merged_graph.edges(data=True))
-
-        # Create cost matrix
-        node_list = list(merged_graph.nodes())
-        node_index = {node: idx for idx, node in enumerate(node_list)}
+                #print(f"Num nodes: {len(merged_graph.nodes)}, nodes are : {merged_graph.nodes}")
+            del corr_graph
+            gc.collect()
 
         # Initialize the cost matrix with infinity
         large_value = 1e9  # Define a large value to replace infinity
-        cost_matrix = np.full((len(node_list), len(node_list)), large_value)
 
-        for u, v, data in merged_graph.edges(data=True):
-            i, j = node_index[u], node_index[v]
-            cost_matrix[i, j] = data['cost']
-            cost_matrix[j, i] = data['cost'] 
+        # Prepare to store merged graphs for each coefficient combination
+        merged_graphs = {}
+        merged_dicts = {}
+        results = {}
 
-        # Convert the cost matrix to a condensed distance matrix for hierarchical clustering
-        np.fill_diagonal(cost_matrix, 0)
-        condensed_cost_matrix = squareform(cost_matrix)
-    
-        # Perform hierarchical clustering
-        Z = linkage(condensed_cost_matrix, method='average')
+        # Iterate over each coefficient combination
+        for coefficients in coefficients:
 
-        # Set a threshold to determine clusters (tune this threshold based on the data)
-        threshold = 0.2
-        clusters = fcluster(Z, t=threshold, criterion='distance')
+            coefficients_str = "_".join(map(str, coefficients)).replace(" ", "").replace(",", "_")
+            #print(f"coefficients_str: {coefficients_str}")
 
-        node_to_cluster = {node: cluster for node, cluster in zip(node_list, clusters)}
+            results[tuple(coefficients)] = {}
 
-        # Create a mapping of merged nodes
-        merged_nodes = {}
-        for cluster in set(clusters):
-            cluster_nodes = [node for node, c in node_to_cluster.items() if c == cluster]
-            representative = cluster_nodes[0]
-            for node in cluster_nodes:
-                if node != representative:
-                    merged_nodes[node] = representative
+            for threshold in combinations_th:
 
-        # Merge clusters and update the graph
-        merged_graph_min = nx.DiGraph()
+                threshold_str = str(threshold).replace(" ", "").replace(",", "_")
+                #print(f"threshold_str: {threshold_str}")
 
-        # Add representative nodes to the new graph
-        for cluster in set(clusters):
-            cluster_nodes = [node for node, c in node_to_cluster.items() if c == cluster]
-            representative = cluster_nodes[0]
-            merged_graph_min.add_node(representative)
+                # Merge clusters and update the graph
+                merged_graph_min = nx.DiGraph()
+                
+                for node in merged_graph.nodes():
+                    if not merged_graph_min.has_node(node):
+                        merged_graph_min.add_node(node)
 
-        # Add edges to the new graph only between the representative nodes
-        for u, v, data in merged_graph.edges(data=True):
-            v_pos = merged_nodes.get(u)
+                # Add edges to the new graph if they meet the threshold
+                for u, v, data in merged_graph.edges(data=True):
 
-            if v_pos is not None and v_pos == v:
-                if not merged_graph_min.has_edge(u, v):
-                    merged_graph_min.add_edge(u, v, **data)
+                    # Ensure that the edge meets the threshold condition and connects different representatives
+                    if u != v and data['cost'].get(tuple(coefficients), large_value) <= threshold:
+                        if not merged_graph_min.has_edge(u, v) and not merged_graph_min.has_edge(v, u):
+                            edge_data = {
+                                'count_common': data['count_common'],
+                                'count_total': data['count_total'],
+                                'cost': data['cost'].get(tuple(coefficients), large_value),
+                                'viewpoint_id_0': data['viewpoint_id_0'],
+                                'viewpoint_id_1': data['viewpoint_id_1']
+                            }
+                            merged_graph_min.add_edge(u, v, **edge_data)
+                        elif not merged_graph_min.has_edge(u, v) and merged_graph_min.has_edge(v, u):
+                            reverse_data = merged_graph_min.get_edge_data(v, u)
+                            reverse_cost = reverse_data['cost']
+                            edge_cost = data['cost'].get(tuple(coefficients), large_value)
+                            if edge_cost < reverse_cost:
+                                merged_graph_min.remove_edge(v, u)
+                                edge_data = {
+                                    'count_common': data['count_common'],
+                                    'count_total': data['count_total'],
+                                    'cost': edge_cost,
+                                    'viewpoint_id_0': data['viewpoint_id_0'],
+                                    'viewpoint_id_1': data['viewpoint_id_1']
+                                }
+                                merged_graph_min.add_edge(u, v, **edge_data)
+                        else:
+                            print("Duplicate edges!!!")
 
-        # # Print nodes and edges of the new graph
-        # print("Nodes in the minimized graph:")
-        # for node in merged_graph_min.nodes():
-        #     print(node)
+                #print(f"Num nodes: {len(merged_graph_min.nodes)}, nodes are : {merged_graph_min.nodes} for minimized graph")
+                # Store the result for this coefficient combination
+                merged_graphs[tuple(coefficients)] = merged_graph_min
 
-        # print("\nEdges in the minimized graph:")
-        # for u, v, data in merged_graph_min.edges(data=True):
-        #     print(f"From {u} to {v}: {data}")
+                #pcd_dict_merged_ = update_groups_and_merge_dictionaries(pcd_list_, merged_graph_min, merged_nodes)
+                pcd_dict_merged_ = update_groups_and_merge_dictionaries(pcd_list_, merged_graph_min)
+                merged_dicts[tuple(coefficients)] = pcd_dict_merged_
+                results[tuple(coefficients)][threshold] = {
+                    'pcd_dict_merged_': pcd_dict_merged_
+                }
 
-        pcd_dict_merged_ = update_groups_and_merge_dictionaries(pcd_list_, merged_graph_min)
+                if verbose_graph:
+                    # Create a figure for subplots
+                    plt.figure(figsize=(15, 12))
 
-        if verbose_graph:
-            # Create a figure for subplots
-            plt.figure(figsize=(15, 12))
+                    # Draw the first graph
+                    plt.subplot(1, 2, 1)  # 1 row, 2 columns, 1st subplot
+                    draw_graph(merged_graph, "Correspondences for All Viewpoints and Mask IDs before optimization", 121)
 
-            # Draw the first graph
-            plt.subplot(1, 2, 1)  # 1 row, 2 columns, 1st subplot
-            draw_graph(merged_graph, "Correspondences for All Viewpoints and Mask IDs before optimization", 121)
+                    # Draw the second graph
+                    plt.subplot(1, 2, 2)  # 1 row, 2 columns, 2nd subplot
+                    draw_graph(merged_graph_min, "Correspondences for All Viewpoints and Mask IDs after optimization", 122)
 
-            # Draw the second graph
-            plt.subplot(1, 2, 2)  # 1 row, 2 columns, 2nd subplot
-            draw_graph(merged_graph_min, "Correspondences for All Viewpoints and Mask IDs after optimization", 122)
-
-            # Display the plot
-            plt.show()
+                    # Display the plot
+                    plt.show()
 
     # Step 3 in pipeline: Region Merging Method
-    for i in range(2):
-        if i == 0:
-            seg_dict = pcd_list[0]
-        elif i == 1:
-            seg_dict = pcd_dict_merged_
-        else: 
-            seg_dict = pcd_list[0]
-        seg_dict["group"] = num_to_natural(remove_small_group(seg_dict["group"], th))
+    # Stage 1: Run i = 0 case once
+    seg_dict = pcd_list[0]
+    print(f'Unique groups baseline: {set(seg_dict["group"])}')
+    seg_dict["group"] = num_to_natural(remove_small_group(seg_dict["group"], th))
+    print(f'Unique groups baseline: {set(seg_dict["group"])}')
 
-        if scene_name in train_scenes:
-            scene_path = join(data_path, "train", scene_name + ".pth")
-        elif scene_name in val_scenes:
-            scene_path = join(data_path, "val", scene_name + ".pth")
-        else: 
-            scene_path = join(data_path, "test", scene_name + ".pth")
-        data_dict = torch.load(scene_path)
-        scene_coord = torch.tensor(data_dict["coord"]).cuda().contiguous()
-        new_offset = torch.tensor(scene_coord.shape[0]).cuda()
-        gen_coord = torch.tensor(seg_dict["coord"]).cuda().contiguous().float()
-        offset = torch.tensor(gen_coord.shape[0]).cuda()
-        gen_group = seg_dict["group"]
-        indices, dis = pointops.knn_query(1, gen_coord, offset, scene_coord, new_offset)
-        indices = indices.cpu().numpy()
-        group = gen_group[indices.reshape(-1)].astype(np.int16)
-        mask_dis = dis.reshape(-1).cpu().numpy() > 0.6
-        group[mask_dis] = -1
-        group = group.astype(np.int16)
-        if i == 0:
-            #torch.save(num_to_natural(group), join(save_path, scene_name + ".pth"))
-            labels = np.array(group)
-            coord_ = data_dict.get("coord", None)
-        elif i == 1:
-            #torch.save(num_to_natural(group), join(save_path, scene_name + "_new" + ".pth"))
+    if scene_name in train_scenes:
+        scene_path = join(data_path, "train", scene_name + ".pth")
+    elif scene_name in val_scenes:
+        scene_path = join(data_path, "val", scene_name + ".pth")
+    else: 
+        scene_path = join(data_path, "test", scene_name + ".pth")
+
+    data_dict = torch.load(scene_path)
+    scene_coord = torch.tensor(data_dict["coord"]).cuda().contiguous()
+    new_offset = torch.tensor(scene_coord.shape[0]).cuda()
+    gen_coord = torch.tensor(seg_dict["coord"]).cuda().contiguous().float()
+    offset = torch.tensor(gen_coord.shape[0]).cuda()
+    gen_group = seg_dict["group"]
+    indices, dis = pointops.knn_query(1, gen_coord, offset, scene_coord, new_offset)
+    indices = indices.cpu().numpy()
+    group = gen_group[indices.reshape(-1)].astype(np.int16)
+    mask_dis = dis.reshape(-1).cpu().numpy() > 0.6
+    group[mask_dis] = -1
+    group = group.astype(np.int16)
+    labels = np.array(group)
+    print(f"Unique groups baseline: {set(labels)}")
+    coord_ = data_dict.get("coord", None)
+
+    torch.save(num_to_natural(group), join(save_path, scene_name + "_baseline.pth"))
+
+    # Stage 2: Iterate over the merged_dicts for the i = 1 case
+    labels_new_list = []
+
+    for coefficients, merged_dicts in results.items():
+        for threshold, result in merged_dicts.items():
+            print(f"\nProcessing for coefficients {coefficients} and threshold {threshold}:")
+
+            seg_dict = result['pcd_dict_merged_']
+            print(f'Unique groups global: {set(seg_dict["group"])}')
+            seg_dict["group"] = num_to_natural(remove_small_group(seg_dict["group"], th))
+            print(f'Unique groups global: {set(seg_dict["group"])}')
+
+            gen_coord = torch.tensor(seg_dict["coord"]).cuda().contiguous().float()
+            gen_group = seg_dict["group"]
+            indices, dis = pointops.knn_query(1, gen_coord, offset, scene_coord, new_offset)
+            indices = indices.cpu().numpy()
+            group = gen_group[indices.reshape(-1)].astype(np.int16)
+            mask_dis = dis.reshape(-1).cpu().numpy() > 0.6
+            group[mask_dis] = -1
+            group = group.astype(np.int16)
             labels_new = np.array(group)
-        else: 
-            #torch.save(num_to_natural(group), join(save_path, scene_name + ".pth"))
-            labels = np.array(group)
+            print(f"Unique groups global: {set(labels_new)}")
+
+            # Convert coefficients tuple to a string, replace spaces and commas with underscores
+            coefficients_str = "_".join(map(str, coefficients)).replace(" ", "").replace(",", "_")
+
+            threshold_str = str(threshold).replace(" ", "").replace(",", "_")
+
+            # Use the coefficients string in the filename
+            filename = f"{scene_name}_{threshold_str}_{coefficients_str}_global.pth"
+            torch.save(num_to_natural(group), join(save_path, filename))
+
+            # Store labels_new in the list
+            labels_new_list.append((coefficients, threshold, labels_new))
+
+    # Get GT data for the scene from saved files
+    gt_path = join(gt_data_path, scene_name + "_gt.pth")
+    if os.path.exists(gt_path):
+        gt_dict = torch.load(gt_path)
+        coord_gt = gt_dict.get("coord", None)
+        labels_gt20 = gt_dict.get("labels_gt20", None)
+        colors_gt20 = gt_dict.get("colors_gt20", None)
+        labels_gt200 = gt_dict.get("labels_gt200", None)
+        colors_gt200 = gt_dict.get("colors_gt200", None)
+        labels_gt_instance = gt_dict.get("labels_gt_instance", None)
+        colors_gt_instance = gt_dict.get("colors_gt_instance", None)
+        labels_gt_nyu = gt_dict.get("labels_nyu", None)
+        colors_gt_nyu = gt_dict.get("colors_nyu", None)
+        print(f"GT data is loaded from {gt_path}")
+        del gt_dict
+        gc.collect()
 
     # Comparisons
 
-    # Get GT data for the scene from dictionary
+    # Initialize an empty dictionary for storing the comparison results
+    comparison_results_dict = {}
 
-    # Access the ground truth labels
-    semantic_gt20 = data_dict.get("semantic_gt20", None)
-    semantic_gt200 = data_dict.get("semantic_gt200", None)
-    instance_gt = data_dict.get("instance_gt", None)
+    #gt_methods = {"nyu40", "ScanNet20", "ScanNet200", "Instance"}
+    #gt_methods = {"ScanNet200"}
+    gt_methods = {"Instance"}
 
-    nyu40class_mapping = {value["id"]: value["name"] for key, value in nyu40_colors_to_class.items()}
-    nyu40class_list = list(nyu40class_mapping.items())
+    gt_method_semantic = "ScanNet200"
+    gt_method_instance = "Instance"
 
-    ScanNet20class_mapping = {value["id"]: value["name"] for key, value in ScanNet20_colors_to_class.items()}
-    ScanNet20class_list = list(ScanNet20class_mapping.items())
+    if gt_method_semantic == "nyu40":
+        labels_gt_sem = labels_gt_nyu
+    elif gt_method_semantic == "ScanNet20":
+        labels_gt_sem = labels_gt20
+    elif gt_method_semantic == "ScanNet200":
+        labels_gt_sem = labels_gt200
+    else:
+        print("GT semantic method chosen is not available!!!")
 
-    ScanNet200class_mapping = {value["id"]: value["name"] for key, value in ScanNet200_colors_to_class.items()}
-    ScanNet200class_list = list(ScanNet200class_mapping.items())
+    if gt_method_instance == "Instance":
+        labels_gt_ins = labels_gt_instance
+    else:
+        print("GT instance method chosen is not available!!!")
     
-    for class_id, class_name in nyu40class_mapping.items():
-        print(f"ID: {class_id}, Class: {class_name}")
+    baseline_metrics = compare_segmentation_output(labels, labels_gt_ins, labels_gt_sem, method="baseline", gt=gt_method_instance)
+    comparison_results_dict[f"{gt_method_instance}_baseline"] = baseline_metrics
+
+    global_metrics_list = compare_segmentation_output(labels_new_list, labels_gt_ins, labels_gt_sem, method="global", gt=gt_method_instance)
+    for idx, global_metrics in enumerate(global_metrics_list):
+        print(global_metrics['threshold'])
+        th = global_metrics['threshold']
+        comparison_results_dict[f"{gt_method_instance}_global_coeff_{idx}_threshold_{th}"] = global_metrics
     
-    for class_id, class_name in ScanNet200class_mapping.items():
-        print(f"ID: {class_id}, Class: {class_name}")
+    if verbose_comparisons:
+        metrics_to_plot = ["iou", "pq", "precision", "recall", "f1"]
+        for metric in metrics_to_plot:
+            plot_comparison_metrics(baseline_metrics, global_metrics_list, metric)
 
-    # Check if the labels exist and print their shapes
-    if semantic_gt20 is not None:
-        #print(f'semantic_gt20 shape: {semantic_gt20.shape}')
-        unique_labels20 = set(semantic_gt20)
-        #unique_labels20 = {label + 1 for label in set(semantic_gt20)}
-        print(f"Unique labels20: {unique_labels20}")
-        for label in unique_labels20:
-            if label < 0 or label >= len(ScanNet20class_list):
-                print(f"Label {label}: {ScanNet20class_mapping.get(label, 'Unknown')}")
-            else: 
-                label, name = ScanNet20class_list[label]
-                print(f"Label {label}: {ScanNet20class_mapping.get(label, 'Unknown')}")
-    else:
-        print('semantic_gt20 not found in the data_dict')
+    num_parts = 1
+    total_items = len(comparison_results_dict)
+    part_size = math.ceil(total_items / num_parts)
 
-    if semantic_gt200 is not None:
-        #print(f'semantic_gt200 shape: {semantic_gt200.shape}')
-        unique_labels200 = set(semantic_gt200)
-        #unique_labels200 = {label + 1 for label in set(semantic_gt200)}
-        print(f"Unique labels200: {unique_labels200}")
-        #print(list(ScanNet200class_mapping)[0])
-        for label in unique_labels200:
-            if label < 0 or label >= len(ScanNet200class_list):
-                print(f"Label {label}: {ScanNet200class_mapping.get(label, 'Unknown')}")
-            else:
-                label, name = ScanNet200class_list[label]
-                print(f"Label {label}: {ScanNet200class_mapping.get(label, 'Unknown')}")
-    else:
-        print('semantic_gt200 not found in the data_dict')
+    # Split the dictionary and save each part
+    keys_list = list(comparison_results_dict.keys())
 
-    if instance_gt is not None:
-        #print(f'instance_gt shape: {instance_gt.shape}')
-        unique_instances = set(instance_gt)
-        print(f"Unique instances: {unique_instances}")
-    else:
-        print('instance_gt not found in the data_dict')
+    for part_num in range(num_parts):
+        # Get the range of keys for this part
+        start_idx = part_num * part_size
+        end_idx = start_idx + part_size
 
-    # Get GT data for the scene nyu40class
-
-    if os.path.exists(join(gt_data_path, scene_name, scene_name + "_vh_clean_2.labels.ply")):
-        print(f"Ground truth data exists for {scene_name}")
-
-        points_gt, colors_gt = load_ply(join(gt_data_path, scene_name, scene_name + "_vh_clean_2.labels.ply"))
-
-        labels_gt = get_labels_from_colors(colors_gt)
+        # Slice the keys list to get the keys for this part
+        part_keys = keys_list[start_idx:end_idx]
         
-        data_dict = {
-            "coord": points_gt,
-            "labels": labels_gt,
-            "colors": colors_gt
+        # Create a dictionary for this part
+        part_dict = {key: comparison_results_dict[key] for key in part_keys}
+        
+        # Save this part dictionary
+        part_path = join(save_path, f"{scene_name}_comparisons_output_part{part_num + 1}.pth")
+
+        print(f"A part of comparison results is ready to save {part_path}")
+        torch.save(part_dict, part_path)
+        print(f"Comparison results part {part_num + 1} saved to {part_path}")
+
+
+def plot_comparison_metrics(baseline_metrics, global_metrics_list, metric_name):
+    # Extract overall and groupwise metrics
+    baseline_overall = baseline_metrics[f"{metric_name}_metrics"]["overall"]
+    baseline_groupwise = baseline_metrics[f"{metric_name}_metrics"]["groupwise"]
+
+    for _, global_metrics in enumerate(global_metrics_list):
+        threshold = global_metrics["threshold"]
+        coefficients = global_metrics["coefficients"]
+
+    global_overall_values = [metrics["metrics"][f"{metric_name}_metrics"]["overall"] for metrics in global_metrics_list]
+    global_groupwise_values = [metrics["metrics"][f"{metric_name}_metrics"]["groupwise"] for metrics in global_metrics_list]
+
+    # Get all unique groups/classes from the baseline and global groupwise metrics
+    groups = sorted(set(baseline_groupwise.keys()).union(*[set(gw.keys()) for gw in global_groupwise_values]))
+    groups.append("Overall")  # Add an 'Overall' label at the end
+
+    # Prepare data for plotting
+    baseline_values = [baseline_groupwise.get(group, np.nan) for group in groups[:-1]] + [baseline_overall]
+    global_values = [[gw.get(group, np.nan) for group in groups[:-1]] + [overall] for gw, overall in zip(global_groupwise_values, global_overall_values)]
+
+    # Plotting
+    bar_width = 0.35
+    index = np.arange(len(groups))
+
+    fig, ax = plt.subplots(figsize=(12, 7))
+
+    # Plotting baseline bars
+    ax.bar(index, baseline_values, bar_width, label="SAM3D")
+
+    # Plotting global bars (each bar set corresponds to a different threshold/coefficients combination)
+    for i, global_val in enumerate(global_values):
+        ax.bar(index + (i + 1) * bar_width, global_val, bar_width, label=f"SAM3D-G")
+
+    ax.set_xlabel('Instances/Classes')
+    ax.set_ylabel(metric_name.upper())
+    rounded_coef = [round(c, 3) for c in coefficients]
+    ax.set_title(f'Comparison of Baseline and Global Methods for {metric_name.upper()}, th: {round(threshold,3)}, {rounded_coef}')
+    ax.set_xticks(index + bar_width * (len(global_values) / 2))
+    ax.set_xticklabels(groups)
+    ax.legend()
+
+    plt.tight_layout()
+    plt.show()
+
+def compare_segmentation_output(labels_list, labels_gt_instance, labels_gt_semantic, method="baseline", gt="Instance"):
+    def calculate_and_store_metrics(labels):
+        accuracy_metrics = calculate_segmentation_accuracy_iou(labels, labels_gt_instance, labels_gt_semantic)
+        iou_dict, mean_iou = compute_iou(accuracy_metrics["remapped_predicted_groups"], accuracy_metrics["ground_truth_groups"])
+        pq_dict, overall_pq = compute_pq(accuracy_metrics["remapped_predicted_groups"], accuracy_metrics["ground_truth_groups"], accuracy_metrics["ground_truth_classes_semantic"])
+        precision_dict, recall_dict, f1_dict, mean_precision, mean_recall, mean_f1 = compute_metrics(accuracy_metrics["remapped_predicted_groups"], accuracy_metrics["ground_truth_groups"])
+
+        iou_metrics = {
+            "overall": mean_iou,
+            "groupwise": iou_dict
         }
-        torch.save(data_dict, join(save_path, scene_name + "_gt.pth"))
 
-        accuracy_metrics = calculate_segmentation_accuracy(labels, labels_gt)
+        pq_metrics = {
+            "overall": overall_pq,
+            "groupwise": pq_dict
+        }
+
+        f1_metrics = {
+            "overall": mean_f1,
+            "groupwise": f1_dict
+        }
+
+        recall_metrics = {
+            "overall": mean_recall,
+            "groupwise": recall_dict
+        }
+
+        precision_metrics = {
+            "overall": mean_precision,
+            "groupwise": precision_dict
+        }
+
+        metrics = {
+            "accuracy_metrics": {
+                "overall": accuracy_metrics["overall"],
+                "groupwise": accuracy_metrics["groupwise"]
+            },
+            "iou_metrics": iou_metrics,
+            "pq_metrics": pq_metrics,
+            "f1_metrics": f1_metrics,
+            "recall_metrics": recall_metrics,
+            "precision_metrics": precision_metrics,
+            "ground_truth_groups": accuracy_metrics["ground_truth_groups"],
+            "ground_truth_classes_semantic": accuracy_metrics["ground_truth_classes_semantic"],
+            "remapped_predicted_groups": accuracy_metrics["remapped_predicted_groups"]
+        }
         
-        accuracy_metrics_new = calculate_segmentation_accuracy(labels_new, labels_gt)
-        if verbose_comparisons:
-            plot_accuracy_metrics(accuracy_metrics, scene_name)
-            plot_accuracy_metrics(accuracy_metrics_new, scene_name)
-        else:
-            print(f"Results for classic one")
-            print(f"Overall Accuracy: {accuracy_metrics['overall_accuracy']}")
-            for instance, accuracy in accuracy_metrics['instance_accuracy'].items():
-                print(f"Instance {instance} Accuracy: {accuracy}")
-            
-            print(f"Results for updated one")
-            print(f"Overall Accuracy: {accuracy_metrics_new['overall_accuracy']}")
-            for instance, accuracy in accuracy_metrics_new['instance_accuracy'].items():
-                print(f"Instance {instance} Accuracy: {accuracy}")
-    else:
-        print(f"Ground truth data does not exist for {scene_name} to compare segmentation results")
+        return metrics
     
+    if method == "baseline":
+        labels = labels_list
+        metrics = calculate_and_store_metrics(labels)
+        return metrics
+    
+    elif method == "global":
+        metrics_list = []
+        for coefficients, threshold, labels in labels_list:
+            metrics = calculate_and_store_metrics(labels)
+            metrics_list.append({
+                "coefficients": coefficients,
+                "threshold": threshold,
+                "metrics": metrics
+            })
+        return metrics_list
+    
+    else:
+        labels = labels_list
+        metrics = calculate_and_store_metrics(labels)
+        
+        return metrics
 
 def get_args():
     '''Command line arguments.'''
