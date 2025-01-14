@@ -441,6 +441,10 @@ def draw_graph(graph, title, subplot_position):
 
     plt.title(title)
 
+def load_json(file_path):
+    with open(file_path, 'r') as f:
+        return json.load(f)
+
 def load_ply(file_path):
     """
     Load a PLY file and return the points and their colors.

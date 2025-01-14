@@ -1028,7 +1028,7 @@ def get_args():
     parser = argparse.ArgumentParser(
         description='Segment Anything on ScanNet.')
     parser.add_argument('--rgb_path', type=str, help='the path of rgb data')
-    parser.add_argument('--data_path', type=str, default='', help='the path of pointcload data')
+    parser.add_argument('--data_path', type=str, default='', help='the path of pointcloud data')
     parser.add_argument('--save_path', type=str, help='Where to save the pcd results')
     parser.add_argument('--save_2dmask_path', type=str, default='', help='Where to save 2D segmentation result from SAM')
     parser.add_argument('--sam_checkpoint_path', type=str, default='', help='the path of checkpoint for SAM')
