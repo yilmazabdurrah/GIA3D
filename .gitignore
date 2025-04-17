@@ -13,3 +13,4 @@ __pycache__/
 HowToRun.md
 visualize_save.py
 visualize_save_v*.py
+datasets/*

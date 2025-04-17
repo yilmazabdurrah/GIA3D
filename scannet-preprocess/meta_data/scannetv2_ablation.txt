@@ -6,4 +6,12 @@ scene0018_00
 scene0019_00
 scene0032_00
 scene0053_00
-
+scene0118_01
+scene0373_01
+scene0441_00
+scene0476_02
+scene0498_00
+scene0545_02
+scene0005_00
+scene0690_01
+scene0703_01
