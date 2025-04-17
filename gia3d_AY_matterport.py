@@ -16,12 +16,10 @@ import torch
 import copy
 import multiprocessing as mp
 import pointops
-import random
 import argparse
 import zipfile
 import tempfile
 import csv
-import colorsys
 
 import itertools
 
@@ -405,39 +403,6 @@ def seg_pcd_matterport(scene_name, rgb_zip, depth_zip, save_path, mask_generator
 
     # Now that we have the point clouds, perform further processing or saving if needed.
     print(f"Segmentation for scene {scene_name} completed.", flush=True)
-
-def generate_colors(num_colors):
-    """
-    Generate a list of visually distinct RGB colors by varying all HSV components.
-    Args:
-        num_colors (int): Number of colors to generate.
-    Returns:
-        list of list: List of RGB colors with values in range [0, 1].
-    """
-    random.seed(42)  # Fix seed for reproducibility
-    colors = []
-    
-    # Use golden ratio conjugate for better color distribution
-    golden_ratio_conjugate = 0.618033988749895
-    hue = random.random()  # Start with a random hue
-    
-    for _ in range(num_colors):
-        hue = (hue + golden_ratio_conjugate) % 1.0  # Distribute hue across the spectrum
-        saturation = 0.5 + random.random() * 0.5  # Vary saturation between 0.5 and 1.0
-        value = 0.5 + random.random() * 0.5       # Vary brightness between 0.5 and 1.0
-        r, g, b = colorsys.hsv_to_rgb(hue, saturation, value)
-        colors.append([r, g, b])
-    
-    return colors
-
-def generate_random_color():
-    """
-    Generate a random RGB color.
-
-    Returns:
-        A numpy array representing an RGB color.
-    """
-    return np.random.rand(3)
 
 def load_point_cloud_with_faces(ply_path):
     mesh = o3d.io.read_triangle_mesh(ply_path)  # Read as a mesh to access faces

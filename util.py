@@ -15,6 +15,9 @@ import networkx as nx
 
 from plyfile import PlyData
 
+import random
+import colorsys
+
 SCANNET_COLOR_MAP_20 = {-1: (0., 0., 0.), 0: (174., 199., 232.), 1: (152., 223., 138.), 2: (31., 119., 180.), 3: (255., 187., 120.), 4: (188., 189., 34.), 5: (140., 86., 75.),
                         6: (255., 152., 150.), 7: (214., 39., 40.), 8: (197., 176., 213.), 9: (148., 103., 189.), 10: (196., 156., 148.), 11: (23., 190., 207.), 12: (247., 182., 210.), 
                         13: (219., 219., 141.), 14: (255., 127., 14.), 15: (158., 218., 229.), 16: (44., 160., 44.), 17: (112., 128., 144.), 18: (227., 119., 194.), 19: (82., 84., 163.)}
@@ -633,6 +636,39 @@ def generate_unique_color(existing_colors):
         color = tuple(np.random.randint(0, 256, 3))
         if color not in existing_colors:
             return color
+
+def generate_colors(num_colors):
+    """
+    Generate a list of visually distinct RGB colors by varying all HSV components.
+    Args:
+        num_colors (int): Number of colors to generate.
+    Returns:
+        list of list: List of RGB colors with values in range [0, 1].
+    """
+    random.seed(42)  # Fix seed for reproducibility
+    colors = []
+    
+    # Use golden ratio conjugate for better color distribution
+    golden_ratio_conjugate = 0.618033988749895
+    hue = random.random()  # Start with a random hue
+    
+    for _ in range(num_colors):
+        hue = (hue + golden_ratio_conjugate) % 1.0  # Distribute hue across the spectrum
+        saturation = 0.5 + random.random() * 0.5  # Vary saturation between 0.5 and 1.0
+        value = 0.5 + random.random() * 0.5       # Vary brightness between 0.5 and 1.0
+        r, g, b = colorsys.hsv_to_rgb(hue, saturation, value)
+        colors.append([r, g, b])
+    
+    return colors
+
+def generate_random_color():
+    """
+    Generate a random RGB color.
+
+    Returns:
+        A numpy array representing an RGB color.
+    """
+    return np.random.rand(3)
 
 ############################# Evaluation Metrics #########################################################
 
