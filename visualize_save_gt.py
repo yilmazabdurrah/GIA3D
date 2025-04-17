@@ -4,7 +4,7 @@ import torch
 import os
 import json
 from util import *
-
+ 
 def generate_unique_color(used_colors):
     while True:
         # Generate a random color
