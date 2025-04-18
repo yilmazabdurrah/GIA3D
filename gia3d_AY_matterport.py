@@ -479,7 +479,7 @@ def assign_labels_from_faces(point_cloud, semseg_data, fseg_data, faces, categor
                             semantic_colors[point_idx] = semantic_rgb
                             # Check if color for this instance_id is already generated
                             if instance_id not in instance_color_map:
-                                instance_color_map[instance_id] = np.random.rand(3)  # Assign a random color
+                                instance_color_map[instance_id] = generate_random_color()
                             # Assign the color to the point
                             instance_colors[point_idx] = instance_color_map[instance_id]
     # Add scalar fields for semantic and instance IDs
@@ -690,15 +690,15 @@ def get_args():
 if __name__ == '__main__':
     args = get_args()
     
-    # Load scene names from scans.txt
-    with open(args.scans_file_path, 'r') as scans_file:
-        scene_names = scans_file.read().splitlines()
-    
     mask_generator = SamAutomaticMaskGenerator(build_sam(checkpoint=args.sam_checkpoint_path).to(device="cuda"))
     voxelize = Voxelize(voxel_size=args.voxel_size, mode="train", keys=("coord", "color", "group"))
     os.makedirs(args.save_path, exist_ok=True)
     
     #write_category_colors_mapping(args.category_mapping_path) # Run once to save RGB colormap for semantic classes
+
+    # Load scene names from scans.txt
+    with open(args.scans_file_path, 'r') as scans_file:
+        scene_names = scans_file.read().splitlines()
 
     for scene_name in scene_names:
         scene_path = os.path.join(args.scans_root, scene_name)
@@ -715,7 +715,9 @@ if __name__ == '__main__':
             
             print(f"Processing scene: {scene_name}")
             
+            # GT data extraction
             acquire_matterport_gt(scene_name, gt_scene_zip, gt_region_zip, args.save_path, args.category_mapping_path)
+            
             #seg_pcd_matterport(
             #    scene_name, rgb_zip, depth_zip, args.save_path, 
             #    mask_generator, args.voxel_size, voxelize, args.th, 
