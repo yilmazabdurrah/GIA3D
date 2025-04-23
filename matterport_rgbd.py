@@ -67,16 +67,18 @@ def get_sam(image, mask_generator):
 
     return group_ids, stability_scores, predicted_ious, features
 
-def get_matterport_pcd(scene_path, color_img_path, depth_img_path, intrinsics_path, pose_path, mask_generator=None):
+def get_matterport_pcd(scene_name, color_img_path, depth_img_path, color_img_name, intrinsics_path, pose_path, save_2dmask_path, mask_generator=None):
     """
     Generate a 3D point cloud from Matterport RGB-D data.
     
     Args:
-        scene_path (str): Path to the scene directory.
+        scene_name (str): Name of the scene processed.
         color_img_path (str): Path to the undistorted color image (JPG).
         depth_img_path (str): Path to the undistorted depth image (16-bit PNG, 0.25mm units).
+        color_img_name (str): Base name of the undistorted color image.
         intrinsics_path (str): Path to the intrinsics file (3x3 matrix).
         pose_path (str): Path to the camera-to-world pose file (4x4 matrix).
+        save_2dmask_path (str): Path to the where to store 2d masks.
         mask_generator: Optional segmentation model for generating masks.
     
     Returns:
@@ -131,8 +133,13 @@ def get_matterport_pcd(scene_path, color_img_path, depth_img_path, intrinsics_pa
     if mask_generator is not None:
         seg_input = cv2.resize(color_img, (1280, 1024))
         group_ids, stability_scores, predicted_ious, features = get_sam(seg_input, mask_generator)
-        # Resize segmentation mask to original resolution, accounting for bottom-left origin
-        group_ids = cv2.resize(group_ids, (w, h), interpolation=cv2.INTER_NEAREST)[mask]
+        if not os.path.exists(os.path.join(save_2dmask_path, scene_name, '2d_masks')):
+            os.makedirs(os.path.join(save_2dmask_path, scene_name, '2d_masks'))
+        img = Image.fromarray(num_to_natural(group_ids).astype(np.int16), mode='I;16')
+        mask_img_full_path = os.path.join(save_2dmask_path, scene_name, '2d_masks', color_img_name + '_mask.png')
+        img.save(mask_img_full_path)
+        print(f"Saved mask image as {mask_img_full_path}")
+        group_ids = group_ids[mask]
         stability_scores = stability_scores[mask]
         predicted_ious = predicted_ious[mask]
         features = features[mask]
@@ -226,34 +233,37 @@ if __name__ == '__main__':
                         # Save intrinsics to temporary file
                         np.savetxt(tmp_intrinsics.name, entry['intrinsics'])
 
+                        color_img_name_base = os.path.splitext(entry['color_file'])[0]
+
                         save_dict = get_matterport_pcd(
-                            scene_path=scene_path,
+                            scene_name=scene_name,
                             color_img_path=tmp_color.name,
                             depth_img_path=tmp_depth.name,
+                            color_img_name=color_img_name_base,
                             intrinsics_path=tmp_intrinsics.name,
                             pose_path=tmp_pose.name,
+                            save_2dmask_path=args.save_2dmask_path,
                             mask_generator=mask_generator
                         )
 
+                        if not os.path.exists(os.path.join(args.save_2dmask_path, scene_name, '2d_masks')):
+                            os.makedirs(os.path.join(args.save_2dmask_path, scene_name, '2d_masks'))
+
+                        # Save PLY file
                         pcd = o3d.geometry.PointCloud()
                         pcd.points = o3d.utility.Vector3dVector(save_dict["coord"])
                         pcd.colors = o3d.utility.Vector3dVector(save_dict["color"] / 255.0)  # normalize RGB to [0,1]
-
-                        filename_base = os.path.splitext(entry['color_file'])[0]
-
-                        # Save PLY file
-                        ply_filename = os.path.join(args.save_path, f"{scene_name}_{filename_base}.ply")
+                        ply_filename = os.path.join(args.save_2dmask_path, scene_name, '2d_masks', f"{color_img_name_base}.ply")
                         o3d.io.write_point_cloud(ply_filename, pcd)
                         print(f"Saved point cloud as {ply_filename}")
 
+                        # Save RGB image file
                         color_img = cv2.imread(tmp_color.name)
-                        color_save_path = os.path.join(args.save_path, f"{scene_name}_{filename_base}.png")
+                        color_save_path = os.path.join(args.save_2dmask_path, scene_name, '2d_masks', f"{color_img_name_base}_rgb.png")
                         cv2.imwrite(color_save_path, color_img)
                         print(f"Saved color image as {color_save_path}")
 
                         # Save the result
-                        #save_filename = os.path.join(args.save_path, f"{scene_name}_view_{idx}.npy")
-                        #np.save(save_filename, save_dict)
                         print(f"Point cloud processed for view {idx} in a dictionary")
 
                         # Clean up temporary files
