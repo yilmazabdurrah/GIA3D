@@ -68,48 +68,71 @@ def get_sam(image, mask_generator):
     return group_ids, stability_scores, predicted_ious, features
 
 def get_matterport_pcd(scene_path, color_img_path, depth_img_path, intrinsics_path, pose_path, mask_generator=None):
+    """
+    Generate a 3D point cloud from Matterport RGB-D data.
     
-    depth_img = cv2.imread(depth_img_path, -1).astype(np.float32) / 1000.0  # mm to m
+    Args:
+        scene_path (str): Path to the scene directory.
+        color_img_path (str): Path to the undistorted color image (JPG).
+        depth_img_path (str): Path to the undistorted depth image (16-bit PNG, 0.25mm units).
+        intrinsics_path (str): Path to the intrinsics file (3x3 matrix).
+        pose_path (str): Path to the camera-to-world pose file (4x4 matrix).
+        mask_generator: Optional segmentation model for generating masks.
+    
+    Returns:
+        dict: Dictionary containing point cloud data (coord, color, group, stability_score, predicted_iou, feature).
+    """
+    # Load images
+    depth_img = cv2.imread(depth_img_path, -1).astype(np.float64)
     color_img = cv2.imread(color_img_path)
     h, w = depth_img.shape
 
-    # Load intrinsics
-    depth_intrinsic = np.loadtxt(intrinsics_path)[:3, :3]  # (3,3) matrix
-    fx, fy = depth_intrinsic[0,0], depth_intrinsic[1,1]
-    cx, cy = depth_intrinsic[0,2], depth_intrinsic[1,2]
+    # Depth scaling (Matterport: 0.25mm per unit, divide by 4000 to get meters)
+    depth_scale = 4000.0
+    depth_img = depth_img / depth_scale
 
-    # Load pose
-    pose = np.loadtxt(pose_path)  # (4,4) matrix
+    # Load intrinsics
+    depth_intrinsic = np.loadtxt(intrinsics_path)
+    if depth_intrinsic.shape != (3, 3):
+        depth_intrinsic = depth_intrinsic[:3, :3]
+    fx, fy = depth_intrinsic[0, 0], depth_intrinsic[1, 1]
+    cx, cy = depth_intrinsic[0, 2], depth_intrinsic[1, 2]
+
+    # Load pose (camera-to-world, no inversion needed)
+    pose = np.loadtxt(pose_path)  # 4x4 matrix
 
     # Get mask (non-zero depth)
     mask = (depth_img > 0)
 
-    # Create 2D pixel grid
-    x, y = np.meshgrid(np.arange(w), np.arange(h))
+    # Create 2D pixel grid (bottom-left origin)
+    x, y = np.meshgrid(np.arange(w), np.arange(h), indexing='xy')
     x, y = x[mask], y[mask]
     depth = depth_img[mask]
 
     # Unproject to camera coordinates
+    Z = -depth
     X = (x - cx) * depth / fx
+    y = h - 1 - y
     Y = (y - cy) * depth / fy
-    Z = depth
 
-    points = np.stack((X, Y, Z, np.ones_like(Z)), axis=1)
+    points = np.stack((X, Y, Z, np.ones_like(Z)), axis=1, dtype=np.float64)
 
-    # Transform to world coordinates
+    # Transform to world coordinates (Z-up)
     points_world = (points @ pose.T)[:, :3]
 
     # Get RGB values
     color = color_img[mask]
     colors = np.zeros_like(color)
-    colors[:, 0] = color[:, 2]
+    colors[:, 0] = color[:, 2]  # BGR to RGB
     colors[:, 1] = color[:, 1]
     colors[:, 2] = color[:, 0]
 
+    # Segmentation (if mask_generator is provided)
     if mask_generator is not None:
         seg_input = cv2.resize(color_img, (1280, 1024))
         group_ids, stability_scores, predicted_ious, features = get_sam(seg_input, mask_generator)
-        group_ids = group_ids[mask]
+        # Resize segmentation mask to original resolution, accounting for bottom-left origin
+        group_ids = cv2.resize(group_ids, (w, h), interpolation=cv2.INTER_NEAREST)[mask]
         stability_scores = stability_scores[mask]
         predicted_ious = predicted_ious[mask]
         features = features[mask]
@@ -118,7 +141,7 @@ def get_matterport_pcd(scene_path, color_img_path, depth_img_path, intrinsics_pa
         group_ids = np.zeros(n)
         stability_scores = np.zeros(n)
         predicted_ious = np.zeros(n)
-        features = np.zeros((n, 256))  # assuming 256-dim features
+        features = np.zeros((n, 256))  # Assuming 256-dim features
 
     group_ids = num_to_natural(group_ids)
 
@@ -132,37 +155,6 @@ def get_matterport_pcd(scene_path, color_img_path, depth_img_path, intrinsics_pa
     )
 
     return save_dict
-
-def extract_rgbd_per_region(scene_name, rgb_zip, depth_zip, save_path):
-    """
-    Extract RGB and depth images for each region from Matterport zip files.
-    """
-    rgb_files = [f for f in rgb_zip.namelist() if f.endswith(('.jpg', '.jpeg', '.png'))]
-    depth_files = [f for f in depth_zip.namelist() if f.endswith(('.png', '.tiff'))]
-
-    print(f"Found {len(rgb_files)} RGB files and {len(depth_files)} depth files")
-
-    for file_list, zip_file, subfolder in [
-        (rgb_files, rgb_zip, "region_rgb_images"),
-        (depth_files, depth_zip, "region_depth_images"),
-    ]:
-        for file_path in file_list:
-            region_name = file_path.split('/')[0]  # e.g., 'region0'
-            filename = os.path.basename(file_path)
-            target_dir = os.path.join(save_path, scene_name, subfolder, region_name)
-            os.makedirs(target_dir, exist_ok=True)
-
-            target_file_path = os.path.join(target_dir, filename)
-            if os.path.exists(target_file_path):
-                print(f"Skipping existing file: {target_file_path}")
-                continue
-
-            with zip_file.open(file_path) as source_file:
-                data = source_file.read()
-                with open(target_file_path, 'wb') as out_file:
-                    out_file.write(data)
-
-            print(f"Saved {file_path} -> {target_file_path}")
 
 def get_args():
     '''Command line arguments.'''
@@ -200,12 +192,8 @@ if __name__ == '__main__':
         # Extract relevant data from zipped files within each scene
         with zipfile.ZipFile(os.path.join(scene_path, 'undistorted_color_images.zip'), 'r') as rgb_zip, \
              zipfile.ZipFile(os.path.join(scene_path, 'undistorted_depth_images.zip'), 'r') as depth_zip, \
-             zipfile.ZipFile(os.path.join(scene_path, 'undistorted_camera_parameters.zip'), 'r') as camera_param_zip, \
-             zipfile.ZipFile(os.path.join(scene_path, 'matterport_camera_poses.zip'), 'r') as camera_poses_zip   :
+             zipfile.ZipFile(os.path.join(scene_path, 'undistorted_camera_parameters.zip'), 'r') as camera_param_zip:
             
-            # RGBD data extraction
-            #extract_rgbd_per_region(scene_name, rgb_zip, depth_zip, args.save_path)
-
             # Read the .conf file from camera parameters zip
             conf_file_name = f"{scene_name}/undistorted_camera_parameters/{scene_name}.conf"
             with camera_param_zip.open(conf_file_name) as conf_file:
@@ -216,7 +204,6 @@ if __name__ == '__main__':
             for idx, entry in enumerate(scan_entries):
                 depth_file = f"{scene_name}//undistorted_depth_images/{entry['depth_file']}"
                 color_file = f"{scene_name}//undistorted_color_images/{entry['color_file']}"
-                pose_file = f"{scene_name}//matterport_camera_poses/{entry['depth_file'].replace('_d', '_pose')}.txt"
 
                 try:
                     # Create temporary files to store extracted data
@@ -239,7 +226,6 @@ if __name__ == '__main__':
                         # Save intrinsics to temporary file
                         np.savetxt(tmp_intrinsics.name, entry['intrinsics'])
 
-                        # Call get_matterport_pcd
                         save_dict = get_matterport_pcd(
                             scene_path=scene_path,
                             color_img_path=tmp_color.name,
@@ -249,10 +235,26 @@ if __name__ == '__main__':
                             mask_generator=mask_generator
                         )
 
+                        pcd = o3d.geometry.PointCloud()
+                        pcd.points = o3d.utility.Vector3dVector(save_dict["coord"])
+                        pcd.colors = o3d.utility.Vector3dVector(save_dict["color"] / 255.0)  # normalize RGB to [0,1]
+
+                        filename_base = os.path.splitext(entry['color_file'])[0]
+
+                        # Save PLY file
+                        ply_filename = os.path.join(args.save_path, f"{scene_name}_{filename_base}.ply")
+                        o3d.io.write_point_cloud(ply_filename, pcd)
+                        print(f"Saved point cloud as {ply_filename}")
+
+                        color_img = cv2.imread(tmp_color.name)
+                        color_save_path = os.path.join(args.save_path, f"{scene_name}_{filename_base}.png")
+                        cv2.imwrite(color_save_path, color_img)
+                        print(f"Saved color image as {color_save_path}")
+
                         # Save the result
                         #save_filename = os.path.join(args.save_path, f"{scene_name}_view_{idx}.npy")
                         #np.save(save_filename, save_dict)
-                        print(f"Point cloud processed for view {idx} in {save_dict}")
+                        print(f"Point cloud processed for view {idx} in a dictionary")
 
                         # Clean up temporary files
                         os.unlink(tmp_depth.name)
