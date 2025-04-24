@@ -646,20 +646,24 @@ def generate_colors(num_colors):
         list of list: List of RGB colors with values in range [0, 1].
     """
     random.seed(42)  # Fix seed for reproducibility
-    colors = []
+    colors = set()
+    result = []
     
     # Use golden ratio conjugate for better color distribution
     golden_ratio_conjugate = 0.618033988749895
     hue = random.random()  # Start with a random hue
     
-    for _ in range(num_colors):
-        hue = (hue + golden_ratio_conjugate) % 1.0  # Distribute hue across the spectrum
-        saturation = 0.5 + random.random() * 0.5  # Vary saturation between 0.5 and 1.0
-        value = 0.5 + random.random() * 0.5       # Vary brightness between 0.5 and 1.0
+    while len(result) < num_colors:
+        hue = (hue + golden_ratio_conjugate) % 1.0
+        saturation = 0.5 + random.random() * 0.5
+        value = 0.5 + random.random() * 0.5
         r, g, b = colorsys.hsv_to_rgb(hue, saturation, value)
-        colors.append([r, g, b])
+        color = (round(r, 4), round(g, 4), round(b, 4))
+        if color not in colors:
+            colors.add(color)
+            result.append(list(color))
     
-    return colors
+    return result
 
 def generate_random_color():
     """
