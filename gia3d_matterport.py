@@ -14,6 +14,8 @@ from util import *
 import numpy as np
 import cv2
 
+import gc
+
 from segment_anything import build_sam, SamAutomaticMaskGenerator
 
 save_mask = False
@@ -166,7 +168,7 @@ def get_matterport_pcd(scene_name, color_img_path, depth_img_path, color_img_nam
 
     return pcd_dict
 
-def seg_pcd(scene_name, mask_generator, voxelize, voxel_size, th, save_path, save_2dmask_path):
+def seg_pcd(scene_name, mask_generator, voxelize, voxel_size, th, save_path, save_2dmask_path, gt_data_path):
     ################################################################################################
     ###################### Step 1 in pipeline: SAM Generate Masks ##################################
     ################################################################################################
@@ -182,6 +184,9 @@ def seg_pcd(scene_name, mask_generator, voxelize, voxel_size, th, save_path, sav
         with camera_param_zip.open(conf_file_name) as conf_file:
             conf_data = conf_file.read().decode('utf-8')
             _, scan_entries = parse_conf_file(conf_data)
+
+        # For demo, take only first 10 viewpoints
+        scan_entries = scan_entries[:10]
 
         # Process each viewpoint (each scan entry in conf file)
         for idx, entry in enumerate(scan_entries):
@@ -274,10 +279,417 @@ def seg_pcd(scene_name, mask_generator, voxelize, voxel_size, th, save_path, sav
                     
                     print(f"Instance segmentation results for view {idx} of {scene_name} assigned to a dictionary", flush=True)
 
-
             except Exception as e:
                 print(f"Error processing view {idx} for scene {scene_name}: {e}")
                 continue
+    ################################################################################################
+    ### Step 2 in pipeline: Merge All Pointclouds in one shot globally to get single point cloud ###
+    ################################################################################################
+    if len(pcd_list) != 1:
+        print(f"Number of viewpoints in the list: {len(pcd_list)}", flush=True)
+
+        for index in range(1, len(pcd_list)):
+            # Get the 'group' value of the elements
+            group_index_last = pcd_list[index - 1]["group"]
+            group_index = pcd_list[index]["group"]
+
+            # Update the current 'group' array
+            group_index[group_index != -1] += group_index_last.max() + 1
+            pcd_list[index]["group"] = group_index
+
+        coefficients = [0.07, 0.057, 0.063, 0.811]
+        threshold = 0.3
+
+        merged_graph = nx.DiGraph()
+        merged_graph_min = nx.DiGraph()
+
+        max_indice = len(pcd_list) - 1
+        for indice in range(len(pcd_list)):
+            print(f"Current viewpoint: {indice}/{max_indice}")
+            corr_graph, pcd_list = cal_scenes(pcd_list, indice, voxel_size=voxel_size, voxelize=voxelize, coefficient_combinations=coefficients) 
+            if len(corr_graph.nodes) > 0 and len(corr_graph.edges) > 0:
+                merged_graph = nx.compose(merged_graph, corr_graph)
+            del corr_graph
+            gc.collect()
+
+        # Initialize the cost matrix with infinity
+        large_value = 1e9  # Define a large value to replace infinity
+
+        # Prepare to store merged graphs for each coefficient combination
+        merged_graphs = {}
+        merged_dicts = {}
+        results = {}
+        results[tuple(coefficients)] = {}
+
+        for node in merged_graph.nodes():
+            if not merged_graph_min.has_node(node):
+                merged_graph_min.add_node(node)
+        
+        # Add edges to the new graph if they meet the threshold
+        for u, v, data in merged_graph.edges(data=True):
+
+            # Ensure that the edge meets the threshold condition and connects different representatives
+            if u != v and data['cost'].get(tuple(coefficients), large_value) <= threshold:
+                if not merged_graph_min.has_edge(u, v) and not merged_graph_min.has_edge(v, u):
+                    edge_data = {
+                        'count_common': data['count_common'],
+                        'count_total': data['count_total'],
+                        'cost': data['cost'].get(tuple(coefficients), large_value),
+                        'viewpoint_id_0': data['viewpoint_id_0'],
+                        'viewpoint_id_1': data['viewpoint_id_1']
+                    }
+                    merged_graph_min.add_edge(u, v, **edge_data)
+                elif not merged_graph_min.has_edge(u, v) and merged_graph_min.has_edge(v, u):
+                    reverse_data = merged_graph_min.get_edge_data(v, u)
+                    reverse_cost = reverse_data['cost']
+                    edge_cost = data['cost'].get(tuple(coefficients), large_value)
+                    if edge_cost < reverse_cost:
+                        merged_graph_min.remove_edge(v, u)
+                        edge_data = {
+                            'count_common': data['count_common'],
+                            'count_total': data['count_total'],
+                            'cost': edge_cost,
+                            'viewpoint_id_0': data['viewpoint_id_0'],
+                            'viewpoint_id_1': data['viewpoint_id_1']
+                        }
+                        merged_graph_min.add_edge(u, v, **edge_data)
+                else:
+                    print("Duplicate edges!!!")
+        
+        merged_graphs[tuple(coefficients)] = merged_graph_min
+        pcd_dict_merged = update_groups_and_merge_dictionaries(pcd_list, merged_graph_min)
+        merged_dicts[tuple(coefficients)] = pcd_dict_merged
+        results[tuple(coefficients)][threshold] = {
+            'pcd_dict_merged': pcd_dict_merged
+        }
+    
+    ################################################################################################
+    ######################## Step 3 in pipeline: Region Merging Method #############################
+    ################################################################################################
+    labels_list = []
+    for coefficients, merged_dicts in results.items():
+        for threshold, result in merged_dicts.items():
+            print(f"\nProcessing for coefficients {coefficients} and threshold {threshold}:")
+
+            seg_dict = result['pcd_dict_merged']
+            print(f'Unique groups GIA3D: {set(seg_dict["group"])}')
+            seg_dict["group"] = num_to_natural(remove_small_group(seg_dict["group"], th))
+            print(f'Unique groups GIA3D: {set(seg_dict["group"])}')
+
+            data_path = os.path.join(gt_data_path,scene_name,'house_segmentations',f"{scene_name}.ply")
+            pcd_gt_scene = o3d.io.read_point_cloud(data_path)
+            coords_np = np.asarray(pcd_gt_scene.points)
+            scene_coord = torch.tensor(coords_np, dtype=torch.float32).cuda().contiguous()
+            new_offset = torch.tensor(scene_coord.shape[0]).cuda()
+            gen_coord = torch.tensor(seg_dict["coord"]).cuda().contiguous().float()
+            offset = torch.tensor(gen_coord.shape[0]).cuda()
+            gen_group = seg_dict["group"]
+            indices, dis = pointops.knn_query(1, gen_coord, offset, scene_coord, new_offset)
+            indices = indices.cpu().numpy()
+            group = gen_group[indices.reshape(-1)].astype(np.int16)
+            mask_dis = dis.reshape(-1).cpu().numpy() > 0.6
+            group[mask_dis] = -1
+            group = group.astype(np.int16)
+            labels = np.array(group)
+            print(f"Unique groups GIA3D: {set(labels)}", flush=True)
+            labels_list.append((coefficients, threshold, labels))
+
+            unique_labels = np.unique(labels)
+            label_to_color = {}
+            color_palette = generate_colors(len(unique_labels))
+
+            for i, label in enumerate(unique_labels):
+                label_to_color[label] = color_palette[i]
+
+            # Assign colors to points based on their labels
+            colors = np.array([label_to_color[label] for label in labels])
+
+            # Create and save point cloud
+            gia3d_pcd = o3d.geometry.PointCloud()
+            gia3d_pcd.points = o3d.utility.Vector3dVector(coords_np)
+            gia3d_pcd.colors = o3d.utility.Vector3dVector(colors)
+            
+            coefficients_str = "_".join(map(str, coefficients)).replace(" ", "").replace(",", "_")
+            threshold_str = str(threshold).replace(" ", "").replace(",", "_")
+            filename = f"GIA3D_{threshold_str}_{coefficients_str}.ply"
+
+            save_segmented_ply_path = os.path.join(save_path, scene_name, filename)
+            os.makedirs(os.path.dirname(save_segmented_ply_path), exist_ok=True)
+            o3d.io.write_point_cloud(save_segmented_ply_path, gia3d_pcd)
+            print(f"Segmented PC with GIA3D for {scene_name} is saved to {save_segmented_ply_path}")
+
+def cal_scenes(pcd_list, index, voxel_size, voxelize, th=50, coefficient_combinations=[[0.25, 0.25, 0.25, 0.25]]):
+    input_dict_0 = pcd_list[index]
+    input_dict_1 = {}
+    pcd0 = make_open3d_point_cloud(input_dict_0, voxelize, th)
+    merged_graph = nx.DiGraph()
+    for i, pcd_dict in enumerate(pcd_list):
+        if i != index: # i > index
+            input_dict_1.update(pcd_dict)
+            pcd1 = make_open3d_point_cloud(input_dict_1, voxelize, th)
+            if pcd0 == None:
+                if pcd1 == None:                    
+                    return merged_graph, pcd_list
+                else:
+                    pcd_list[i].update(input_dict_1)
+                    return merged_graph, pcd_list
+            elif pcd1 == None:
+                pcd_list[index].update(input_dict_0)
+                return merged_graph, pcd_list
+
+            # Cal Dul-overlap
+            match_inds = get_matching_indices(pcd1, pcd0, 1.5 * voxel_size, 1)
+            if match_inds:
+                correspondence_graph, input_dict_0, input_dict_1 = cal_graph(input_dict_0, input_dict_1, match_inds, coefficient_combinations)
+                pcd_list[i].update(input_dict_1)
+                pcd_list[index].update(input_dict_0)
+                if len(correspondence_graph.nodes) > 0 and len(correspondence_graph.edges) > 0:
+                    merged_graph = nx.compose(merged_graph, correspondence_graph)
+
+    return merged_graph, pcd_list
+
+def cal_graph(input_dict, new_input_dict, match_inds, coefficient_combinations=[[0.25, 0.25, 0.25, 0.25]]):
+
+    global maxVal
+    global maxVal_stab
+    global maxVal_pred
+    global maxVal_iou
+
+    group_0 = input_dict["group"]
+    group_1 = new_input_dict["group"]
+    coord_0 = input_dict["coord"]
+    coord_1 = new_input_dict["coord"]
+    view_ids_0 = input_dict["viewpoint_id"]
+    view_ids_1 = new_input_dict["viewpoint_id"]
+    view_names_0 = input_dict["viewpoint_name"]
+    view_names_1 = new_input_dict["viewpoint_name"]
+
+    features_0 = input_dict["feature"]
+    features_1 = new_input_dict["feature"]
+    stability_scores_0 = input_dict["stability_score"]
+    stability_scores_1 = new_input_dict["stability_score"]
+    predicted_ious_0 = input_dict["predicted_iou"]
+    predicted_ious_1 = new_input_dict["predicted_iou"]
+
+    unique_nodes_0 = list(set(zip(view_names_0, group_0)))
+    unique_nodes_1 = list(set(zip(view_names_1, group_1)))
+
+    # Initialize the graph
+    correspondence_graph = nx.DiGraph()   
+
+    for node in unique_nodes_0:
+        correspondence_graph.add_node(node)
+    for node in unique_nodes_1:
+        correspondence_graph.add_node(node)
+
+    # Calculate the group number correspondence of overlapping points
+    point_cnt_group_0 = {}
+    point_cnt_group_1 = {}
+    
+    unique_values_group_0 = set(group_0)
+
+    for unique_value in unique_values_group_0:
+        point_cnt_group_0[unique_value] = sum(1 for element in group_0 if element == unique_value)
+
+    unique_values_group_1 = set(group_1)
+
+    for unique_value in unique_values_group_1:
+        point_cnt_group_1[unique_value] = sum(1 for element in group_1 if element == unique_value)
+
+    cost = {}
+    group_overlap = {}
+
+    for i, j in match_inds:
+        group_i = group_1[i]
+        group_j = group_0[j]
+        view_id_i = view_ids_1[i]
+        view_id_j = view_ids_0[j]
+        
+        view_name_i = view_names_1[i]
+        view_name_j = view_names_0[j]
+        coord_i = coord_1[i]
+
+        feature_i = features_1[i]
+        feature_j = features_0[j]
+
+        stability_score_i = stability_scores_1[i]
+        stability_score_j = stability_scores_0[j]
+
+        predicted_iou_i = predicted_ious_1[i]
+        predicted_iou_j = predicted_ious_0[j]
+
+        if group_i == -1 or group_j == -1:
+            continue
+        '''if group_i == -1 and group_j == -1:
+            continue
+        elif group_i == -1:
+            group_1[i] = group_j
+            new_input_dict["group"][i] = group_j
+            point_cnt_group_1[group_j] = point_cnt_group_1.get(group_j, 0) + 1
+            group_i = group_j
+            correspondence_graph.add_node((view_name_i, group_j))
+        # If group_j is -1, skip this match
+        elif group_j == -1:
+            continue
+        elif group_i == -1:
+            new_input_dict["group"][i] = group_0[j]
+            group_1[i] = group_0[j]
+            print("point_cnt_group_1: ", point_cnt_group_1)
+            point_cnt_group_1[group_j] = point_cnt_group_1[group_i]
+            print("point_cnt_group_1: ", point_cnt_group_1)
+            #del point_cnt_group_1[group_i]
+            group_i = group_j
+
+        if group_i == -1:
+            group_1[i] = group_0[j]
+            continue
+        if group_j == -1:
+            continue'''
+        
+        
+        '''elif group_i == -1:
+            group_1[i] = group_0[j]
+            group_i = group_j
+            new_input_dict["group"][i] = group_0[j]'''
+
+        overlap_key = (group_i, view_id_i, view_name_i, point_cnt_group_1[group_i], group_j, view_id_j, view_name_j, point_cnt_group_0[group_j])
+        #print("overlap_key: ", overlap_key, " and features: ", feature_i, feature_j)
+        if overlap_key not in group_overlap:
+            group_overlap[overlap_key] = 0
+            cost[overlap_key] = {tuple(coefficients): 0 for coefficients in coefficient_combinations}
+        group_overlap[overlap_key] += 1
+        '''if group_i == -1 and group_j == -1:
+            cost[overlap_key] += 3
+        elif group_i == -1 or group_j == -1:
+            continue
+        else:'''
+
+        for coefficients in coefficient_combinations:
+            L1, L2, L3, _ = coefficients
+            fd = normalized_feature_difference(feature_i,feature_j)
+            ss = abs(stability_score_i - stability_score_j)
+            if ss > 0.5:
+                ss = 0.0
+            piou = abs(predicted_iou_i - predicted_iou_j)
+            if piou > 0.5:
+                piou = 0.0
+            
+            cost[overlap_key][tuple(coefficients)] += L1*fd + L2*ss + L3*piou
+
+    # Add edges with costs for all coefficient combinations
+    for key, count in group_overlap.items():
+        group_i, view_id_i, view_name_i, point_cnt_group_i, group_j, view_id_j, view_name_j, point_cnt_group_j = key
+        edge_data = {
+            'count_common': count,
+            'count_total': [point_cnt_group_i, point_cnt_group_j],
+            'viewpoint_id_0': view_id_j,
+            'viewpoint_id_1': view_id_i,
+            'cost': {}
+        }
+
+        for coefficients in coefficient_combinations:
+            _, _, _, L4 = coefficients
+            
+            cost_value = cost[key][tuple(coefficients)] / count + L4 * max(0, (1 - count / min(point_cnt_group_i, point_cnt_group_j)))
+            edge_data['cost'][tuple(coefficients)] = cost_value
+
+        correspondence_graph.add_edge(
+            (view_name_i, group_i), 
+            (view_name_j, group_j), 
+            **edge_data
+        )
+        #print(f"key: {key} and count: {count} and cost: {edge_data['cost']}")
+
+    return correspondence_graph, input_dict, new_input_dict
+
+def normalized_feature_difference(f_i, f_j):
+    # Calculate the Euclidean norm of the difference
+    difference_norm = np.linalg.norm(f_i - f_j)
+    # Normalize the difference norm
+    normalized_difference = difference_norm / len(f_i)
+    return normalized_difference
+
+def update_groups_and_merge_dictionaries(pcd_list, merged_graph_min):
+    # Create a mapping for final groups to ensure all connected nodes have the same group
+    final_group_map = {}
+    
+    grp_cnt = 0
+    for u, v in merged_graph_min.edges():
+        group_u = final_group_map.get(u, None)
+        group_v = final_group_map.get(v, None)
+        
+        if group_u is None and group_v is None:
+            # If neither node has a group assigned, create a new group and assign it to both
+            new_group = grp_cnt
+            grp_cnt += 1
+            final_group_map[u] = new_group
+            final_group_map[v] = new_group
+        elif group_u is not None and group_v is None:
+            # If u has a group but v does not, assign v to u's group
+            final_group_map[v] = group_u
+        elif group_u is None and group_v is not None:
+            # If v has a group but u does not, assign u to v's group
+            final_group_map[u] = group_v
+        elif group_u != group_v:
+            # If both nodes have different groups, unify the groups
+            for node in final_group_map:
+                if final_group_map[node] == group_v:
+                    final_group_map[node] = group_u
+
+    # Assign unique groups to nodes that are not connected
+    for node in merged_graph_min.nodes():
+        if node not in final_group_map:
+            _, mask = node
+            if mask != -1:
+                final_group_map[node] = grp_cnt
+                grp_cnt += 1
+            else:
+                final_group_map[node] = -1
+
+    # Initialize empty lists for concatenated data
+    all_coords = []
+    all_colors = []
+    all_groups = []
+
+    # Iterate over the pcd_list and update group information
+    for pcd in pcd_list:
+        viewpoint_name = pcd["viewpoint_name"][0]
+        mask_ids = pcd["group"]
+        
+        # Create a mapping from old mask ids to new group ids
+        new_groups = []
+        cnt = 0
+        for mask_id in mask_ids:
+            if (viewpoint_name, mask_id) in final_group_map:
+                #print(f"mask_id: {mask_id}, mapping: {final_group_map[(viewpoint_name, mask_id)]}")
+                new_groups.append(final_group_map[(viewpoint_name, mask_id)])
+            else:
+                new_groups.append(-1)
+                cnt+=1
+                print(f"Not in dictionary {cnt}")
+        
+        all_coords.append(pcd["coord"])
+        all_colors.append(pcd["color"])
+        all_groups.append(new_groups)
+
+    # Combine all data into a single dictionary
+    pcd_dict = {
+        "coord": np.concatenate(all_coords, axis=0),
+        "color": np.concatenate(all_colors, axis=0),
+        "group": np.concatenate(all_groups, axis=0)
+    }
+    return voxelize(pcd_dict)
+
+def make_open3d_point_cloud(input_dict, voxelize, th):
+    input_dict["group"] = remove_small_group(input_dict["group"], th)
+    # input_dict = voxelize(input_dict)
+
+    xyz = input_dict["coord"]
+    if np.isnan(xyz).any():
+        return None
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(xyz)
+    return pcd
 
 def get_args():
     '''Command line arguments.'''
@@ -290,6 +702,7 @@ def get_args():
     parser.add_argument('--voxel_size', type=float, default=0.05, help='Voxel size for downsampling')
     parser.add_argument('--th', type=int, default=50, help='Threshold for ignoring small groups to reduce noise')
     parser.add_argument('--category_mapping_path', type=str, default='', help='Path to Matterport dataset semantic class id mapping')
+    parser.add_argument('--gt_data_path', type=str, default='', help='The path of 3D ground truth data (color, panoptic segmented)')
     return parser.parse_args()
 
 if __name__ == '__main__':
@@ -313,8 +726,10 @@ if __name__ == '__main__':
             print(f"Warning: Scene folder not found for {scene_name}")
             continue
         
-        print(f"Processing scene: {scene_name}", flush=True)
+        print(f"Processing scene {scene_name}", flush=True)
 
-        seg_pcd(scene_name, mask_generator, voxelize, args.voxel_size, args.th, args.save_path, args.save_2dmask_path)
+        seg_pcd(scene_name, mask_generator, voxelize, args.voxel_size, args.th, args.save_path, args.save_2dmask_path, args.gt_data_path)
+
+        print(f"Scene {scene_name} processed", flush=True)
         
         
