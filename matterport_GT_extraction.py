@@ -4,8 +4,8 @@ Main Script
 Author: Yunhan Yang (yhyang.myron@gmail.com)
 
 Updated by
-Abdurrahman Yilmaz (ayilmaz@lincoln.ac.uk) v08 for Matterport Dataset
-12 Jan 2025
+Abdurrahman Yilmaz (ayilmaz@lincoln.ac.uk) for Matterport Dataset GT Data Extraction
+24 Apr 2025 (v08)
 """
 
 import os
@@ -13,33 +13,15 @@ import cv2
 import numpy as np
 import open3d as o3d
 import torch
-import copy
-import multiprocessing as mp
-import pointops
 import argparse
 import zipfile
 import tempfile
 import csv
 
-import itertools
-
-import pickle
-
 from segment_anything import build_sam, SamAutomaticMaskGenerator
-from concurrent.futures import ProcessPoolExecutor
-from itertools import repeat
 from PIL import Image
 from os.path import join
 from util import *
-
-import networkx as nx
-import matplotlib.pyplot as plt
-
-from scipy.cluster.hierarchy import linkage, fcluster
-from scipy.spatial.distance import squareform
-
-import gc
-import math
 
 verbose = False # To print out intermediate data
 verbose_graph = False # To plot correspondence graphs before and after optimization
@@ -607,73 +589,6 @@ def acquire_matterport_gt(scene_name,gt_scene_zip,gt_region_zip,save_path,catego
             else:
                 print(f"Failed to save point cloud to {save_instance_ply_path}")
 
-    '''scene_pc_file = [f for f in gt_scene_zip.namelist() if scene_name in f and f.endswith(".ply")]
-    scene_semseg_file = [f for f in gt_scene_zip.namelist() if "semseg.json" in f]
-
-    if scene_pc_file:
-        with tempfile.NamedTemporaryFile(suffix=".ply", delete=False) as temp_ply_file:
-            temp_ply_file.write(gt_scene_zip.read(scene_pc_file[0]))
-            temp_ply_file.close()
-            point_cloud_scene, faces_scene = load_point_cloud_with_faces(temp_ply_file.name)
-            os.remove(temp_ply_file.name)
-    else:
-        raise FileNotFoundError(f"No .ply file found in {gt_scene_zip.filename} for {scene_name}")
-
-    if scene_semseg_file:
-        with gt_scene_zip.open(scene_semseg_file[0]) as semseg_file:
-            semseg_data_scene= json.load(semseg_file)
-            print(f"Top-level keys in semseg_data: {semseg_data_scene.keys()}")
-
-            # Print the number of segment groups
-            seg_groups = semseg_data_scene.get("segGroups", [])
-            print(f"Number of segment groups: {len(seg_groups)}")
-
-            # Inspect the first segment group
-            if seg_groups:
-                first_group = seg_groups[0]
-                print("\nFirst Segment Group Info:")
-                for key, value in first_group.items():
-                    print(f"  {key}: {value}")
-            else:
-                print("No segment groups found.")
-    else:
-        raise FileNotFoundError(f"No semseg.json file found in {gt_scene_zip.filename} for {scene_name}")
-
-    point_cloud_gt = assign_labels_from_faces(point_cloud_scene, semseg_data_scene, faces_scene)
-
-    scene_gt_ply_path = os.path.join(save_path, scene_name)
-    o3d.io.write_point_cloud(scene_gt_ply_path, point_cloud_gt)
-    print(f"Saved ground truth point cloud with semantic and instance labels to {scene_gt_ply_path}")
-
-    region_files = [f for f in gt_region_zip.namelist() if "region" in f and f.endswith(".ply")]
-    region_semseg_files = [f for f in gt_region_zip.namelist() if "semseg.json" in f]
-
-    for region_ply_file, semseg_file in zip(region_files, region_semseg_files):
-        # Extracting region point cloud
-        gt_region_zip.extract(region_ply_file, path=save_path)
-        region_ply_path = os.path.join(save_path, region_ply_file)
-        point_cloud = o3d.io.read_point_cloud(region_ply_path)
-        points = np.asarray(point_cloud.points)
-        
-        # Load semantic data
-        semseg_path = os.path.join(save_path, semseg_file)
-        semseg_data = load_json(semseg_path)
-        segment_to_label = {seg['segments'][0]: seg['label'] for seg in semseg_data['segGroups']}
-        
-        # Add custom fields to point cloud (Placeholder logic)
-        # Assuming a fixed mapping from `segment_id` to each point
-        semantic_classes = np.zeros(len(points), dtype=np.int32)  # Dummy initialization
-        instance_ids = np.zeros(len(points), dtype=np.int32)  # Dummy initialization
-        
-        # Add semantic and instance fields to the point cloud
-        point_cloud.colors = o3d.utility.Vector3dVector(points[:, :3])  # Use original RGB
-        point_cloud.points = o3d.utility.Vector3dVector(points[:, :3])  # XYZ coordinates
-        
-        # Save augmented point cloud with new attributes
-        output_path = region_ply_path.replace('.ply', '_gt.ply')
-        o3d.io.write_point_cloud(output_path, point_cloud)
-        print(f"Saved ground truth point cloud with semantic and instance labels to {output_path}")'''
-
 def get_args():
     '''Command line arguments.'''
     parser = argparse.ArgumentParser(description='Segment Anything on Matterport dataset.')
@@ -718,8 +633,4 @@ if __name__ == '__main__':
             # GT data extraction
             acquire_matterport_gt(scene_name, gt_scene_zip, gt_region_zip, args.save_path, args.category_mapping_path)
             
-            #seg_pcd_matterport(
-            #    scene_name, rgb_zip, depth_zip, args.save_path, 
-            #    mask_generator, args.voxel_size, voxelize, args.th, 
-            #    args.save_2dmask_path)
 
