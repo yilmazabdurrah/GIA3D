@@ -15,6 +15,8 @@ import numpy as np
 import cv2
 
 import gc
+import pickle
+import glob
 
 from segment_anything import build_sam, SamAutomaticMaskGenerator
 
@@ -186,8 +188,8 @@ def seg_pcd(scene_name, mask_generator, voxelize, voxel_size, th, save_path, sav
             conf_data = conf_file.read().decode('utf-8')
             _, scan_entries = parse_conf_file(conf_data)
 
-        # For demo, take only first 10 viewpoints
-        #scan_entries = scan_entries[:50]
+        # For demo, take only first N viewpoints
+        # scan_entries = scan_entries[:5]
         max_indice = len(scan_entries) - 1
         print(f"Number of viewpoints in the list: {len(scan_entries)}", flush=True)
         # Process each viewpoint (each scan entry in conf file)
@@ -236,7 +238,7 @@ def seg_pcd(scene_name, mask_generator, voxelize, voxel_size, th, save_path, sav
                     viewpoint_ids = [idx + 1] * len(pcd_dict["coord"])
                     viewpoint_names = [color_img_name_base] * len(pcd_dict["coord"])
 
-                    print(f"before voxelization  len pcd_dict[group]: {len(pcd_dict['coord'])}", flush=True)
+                    print(f"before voxelization len pcd_dict[group]: {len(pcd_dict['coord'])}", flush=True)
 
                     pcd_dict.update(viewpoint_id=viewpoint_ids, viewpoint_name=viewpoint_names)
                     pcd_dict = voxelize(pcd_dict)
@@ -244,6 +246,14 @@ def seg_pcd(scene_name, mask_generator, voxelize, voxel_size, th, save_path, sav
                     print(f"after voxelization len pcd_dict[group]: {len(pcd_dict['coord'])}", flush=True)
                     
                     pcd_list.append(pcd_dict)
+
+                    # if (idx + 1) % 100 == 0 or idx == max_indice:
+                    #     os.makedirs(os.path.join(save_path,scene_name), exist_ok=True)
+                    #     temp_save_path = os.path.join(save_path, scene_name, f"temp_pcd_list_{idx + 1}.pkl")
+                    #     with open(temp_save_path, 'wb') as f:
+                    #         pickle.dump(pcd_list, f)
+                    #     print(f"Saved partial pcd_list with {len(pcd_list)} entries to {temp_save_path}", flush=True)
+                    #     pcd_list.clear()
 
                     group_ids = pcd_dict["group"]
                     unique_groups = np.unique(group_ids).astype(int)
@@ -290,6 +300,22 @@ def seg_pcd(scene_name, mask_generator, voxelize, voxel_size, th, save_path, sav
             except Exception as e:
                 print(f"Error processing view {idx} for scene {scene_name}: {e}")
                 continue
+    # pcd_list = []
+    # temp_files = sorted(glob.glob(os.path.join(save_2dmask_path, scene_name, "temp_pcd_list_*.pkl")))
+
+    # for file in temp_files:
+    #     with open(file, 'rb') as f:
+    #         temp_list = pickle.load(f)
+    #         pcd_list.extend(temp_list)
+    #     os.remove(file)
+    #     print(f"Loaded {len(temp_list)} entries from {file} and deleted", flush=True)
+
+    os.makedirs(os.path.join(save_path,scene_name,"step1"), exist_ok=True)
+    temp_save_path = os.path.join(save_path, scene_name, "step1", "temp_pcd_list.pkl")
+    with open(temp_save_path, 'wb') as f:
+        pickle.dump(pcd_list, f)
+    print(f"Saved pcd_list with {len(pcd_list)} entries to {temp_save_path}", flush=True)
+
     ################################################################################################
     ### Step 2 in pipeline: Merge All Pointclouds in one shot globally to get single point cloud ###
     ################################################################################################
