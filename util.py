@@ -329,7 +329,8 @@ class Voxelize(object):
             if self.return_min_coord:
                 data_dict["min_coord"] = min_coord.reshape([1, 3])
             for key in self.keys:
-                data_dict[key] = data_dict[key][idx_unique]
+                if key in data_dict:
+                    data_dict[key] = data_dict[key][idx_unique]
             return data_dict
 
         elif self.mode == 'test':  # test mode

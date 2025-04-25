@@ -19,6 +19,7 @@ import gc
 from segment_anything import build_sam, SamAutomaticMaskGenerator
 
 save_mask = False
+verbose_graph = True
 
 def parse_conf_file(conf_data):
     """Parse the .conf file to extract intrinsics matrices and scan entries."""
@@ -172,7 +173,7 @@ def seg_pcd(scene_name, mask_generator, voxelize, voxel_size, th, save_path, sav
     ################################################################################################
     ###################### Step 1 in pipeline: SAM Generate Masks ##################################
     ################################################################################################
-    
+    print("Step 1", flush=True)
     pcd_list = []
     # Extract relevant data from zipped files within each scene
     with zipfile.ZipFile(os.path.join(scene_path, 'undistorted_color_images.zip'), 'r') as rgb_zip, \
@@ -186,11 +187,12 @@ def seg_pcd(scene_name, mask_generator, voxelize, voxel_size, th, save_path, sav
             _, scan_entries = parse_conf_file(conf_data)
 
         # For demo, take only first 10 viewpoints
-        scan_entries = scan_entries[:10]
-
+        #scan_entries = scan_entries[:50]
+        max_indice = len(scan_entries) - 1
+        print(f"Number of viewpoints in the list: {len(scan_entries)}", flush=True)
         # Process each viewpoint (each scan entry in conf file)
         for idx, entry in enumerate(scan_entries):
-            print(f"Processing view {idx} of {scene_name} using RGB: {entry['color_file']} and Depth: {entry['depth_file']} images", flush=True)
+            print(f"Processing view {idx}/{max_indice} of {scene_name} using RGB: {entry['color_file']} and Depth: {entry['depth_file']} images", flush=True)
             
             depth_file = f"{scene_name}//undistorted_depth_images/{entry['depth_file']}"
             color_file = f"{scene_name}//undistorted_color_images/{entry['color_file']}"
@@ -234,10 +236,18 @@ def seg_pcd(scene_name, mask_generator, voxelize, voxel_size, th, save_path, sav
                     viewpoint_ids = [idx + 1] * len(pcd_dict["coord"])
                     viewpoint_names = [color_img_name_base] * len(pcd_dict["coord"])
 
+                    print(f"before voxelization  len pcd_dict[group]: {len(pcd_dict['coord'])}", flush=True)
+
                     pcd_dict.update(viewpoint_id=viewpoint_ids, viewpoint_name=viewpoint_names)
                     pcd_dict = voxelize(pcd_dict)
+
+                    print(f"after voxelization len pcd_dict[group]: {len(pcd_dict['coord'])}", flush=True)
                     
                     pcd_list.append(pcd_dict)
+
+                    group_ids = pcd_dict["group"]
+                    unique_groups = np.unique(group_ids).astype(int)
+                    print(f"Unique groups for view {idx}/{max_indice} of {scene_name}: {unique_groups}")
 
                     if save_mask:
                         if not os.path.exists(os.path.join(save_2dmask_path, scene_name, 'masks')):
@@ -252,8 +262,6 @@ def seg_pcd(scene_name, mask_generator, voxelize, voxel_size, th, save_path, sav
                         print(f"Saved, colored point cloud as {ply_filename}")
 
                         # Save PLY instance file
-                        group_ids = pcd_dict["group"]
-                        unique_groups = np.unique(group_ids).astype(int)
                         num_groups = len(unique_groups)
                         group_colors = generate_colors(num_groups)
                         group_color_map = {group: group_colors[i] for i, group in enumerate(unique_groups)}
@@ -285,8 +293,8 @@ def seg_pcd(scene_name, mask_generator, voxelize, voxel_size, th, save_path, sav
     ################################################################################################
     ### Step 2 in pipeline: Merge All Pointclouds in one shot globally to get single point cloud ###
     ################################################################################################
+    print("Step 2", flush=True)
     if len(pcd_list) != 1:
-        print(f"Number of viewpoints in the list: {len(pcd_list)}", flush=True)
 
         for index in range(1, len(pcd_list)):
             # Get the 'group' value of the elements
@@ -297,16 +305,20 @@ def seg_pcd(scene_name, mask_generator, voxelize, voxel_size, th, save_path, sav
             group_index[group_index != -1] += group_index_last.max() + 1
             pcd_list[index]["group"] = group_index
 
-        coefficients = [0.07, 0.057, 0.063, 0.811]
+        for id, pcd in enumerate(pcd_list):
+            group_ids = pcd["group"]
+            unique_groups = np.unique(group_ids).astype(int)
+            print(f"Unique groups for view {id}/{max_indice} of {scene_name}: {unique_groups}")
+
+        coefficients = [[0.07, 0.057, 0.063, 0.811]]
         threshold = 0.3
 
         merged_graph = nx.DiGraph()
         merged_graph_min = nx.DiGraph()
 
-        max_indice = len(pcd_list) - 1
         for indice in range(len(pcd_list)):
             print(f"Current viewpoint: {indice}/{max_indice}")
-            corr_graph, pcd_list = cal_scenes(pcd_list, indice, voxel_size=voxel_size, voxelize=voxelize, coefficient_combinations=coefficients) 
+            corr_graph, pcd_list = cal_scenes(pcd_list, indice, voxel_size=voxel_size, voxelize=voxelize, th=th, coefficient_combinations=coefficients) 
             if len(corr_graph.nodes) > 0 and len(corr_graph.edges) > 0:
                 merged_graph = nx.compose(merged_graph, corr_graph)
             del corr_graph
@@ -319,53 +331,70 @@ def seg_pcd(scene_name, mask_generator, voxelize, voxel_size, th, save_path, sav
         merged_graphs = {}
         merged_dicts = {}
         results = {}
-        results[tuple(coefficients)] = {}
+        for coefficients in coefficients:
+            results[tuple(coefficients)] = {}
 
-        for node in merged_graph.nodes():
-            if not merged_graph_min.has_node(node):
-                merged_graph_min.add_node(node)
-        
-        # Add edges to the new graph if they meet the threshold
-        for u, v, data in merged_graph.edges(data=True):
+            for node in merged_graph.nodes():
+                if not merged_graph_min.has_node(node):
+                    merged_graph_min.add_node(node)
+            
+            # Add edges to the new graph if they meet the threshold
+            for u, v, data in merged_graph.edges(data=True):
 
-            # Ensure that the edge meets the threshold condition and connects different representatives
-            if u != v and data['cost'].get(tuple(coefficients), large_value) <= threshold:
-                if not merged_graph_min.has_edge(u, v) and not merged_graph_min.has_edge(v, u):
-                    edge_data = {
-                        'count_common': data['count_common'],
-                        'count_total': data['count_total'],
-                        'cost': data['cost'].get(tuple(coefficients), large_value),
-                        'viewpoint_id_0': data['viewpoint_id_0'],
-                        'viewpoint_id_1': data['viewpoint_id_1']
-                    }
-                    merged_graph_min.add_edge(u, v, **edge_data)
-                elif not merged_graph_min.has_edge(u, v) and merged_graph_min.has_edge(v, u):
-                    reverse_data = merged_graph_min.get_edge_data(v, u)
-                    reverse_cost = reverse_data['cost']
-                    edge_cost = data['cost'].get(tuple(coefficients), large_value)
-                    if edge_cost < reverse_cost:
-                        merged_graph_min.remove_edge(v, u)
+                # Ensure that the edge meets the threshold condition and connects different representatives
+                if u != v and data['cost'].get(tuple(coefficients), large_value) <= threshold:
+                    if not merged_graph_min.has_edge(u, v) and not merged_graph_min.has_edge(v, u):
                         edge_data = {
                             'count_common': data['count_common'],
                             'count_total': data['count_total'],
-                            'cost': edge_cost,
+                            'cost': data['cost'].get(tuple(coefficients), large_value),
                             'viewpoint_id_0': data['viewpoint_id_0'],
                             'viewpoint_id_1': data['viewpoint_id_1']
                         }
                         merged_graph_min.add_edge(u, v, **edge_data)
-                else:
-                    print("Duplicate edges!!!")
+                    elif not merged_graph_min.has_edge(u, v) and merged_graph_min.has_edge(v, u):
+                        reverse_data = merged_graph_min.get_edge_data(v, u)
+                        reverse_cost = reverse_data['cost']
+                        edge_cost = data['cost'].get(tuple(coefficients), large_value)
+                        if edge_cost < reverse_cost:
+                            merged_graph_min.remove_edge(v, u)
+                            edge_data = {
+                                'count_common': data['count_common'],
+                                'count_total': data['count_total'],
+                                'cost': edge_cost,
+                                'viewpoint_id_0': data['viewpoint_id_0'],
+                                'viewpoint_id_1': data['viewpoint_id_1']
+                            }
+                            merged_graph_min.add_edge(u, v, **edge_data)
+                    else:
+                        print("Duplicate edges!!!")
         
-        merged_graphs[tuple(coefficients)] = merged_graph_min
-        pcd_dict_merged = update_groups_and_merge_dictionaries(pcd_list, merged_graph_min)
-        merged_dicts[tuple(coefficients)] = pcd_dict_merged
-        results[tuple(coefficients)][threshold] = {
-            'pcd_dict_merged': pcd_dict_merged
-        }
+            merged_graphs[tuple(coefficients)] = merged_graph_min
+            pcd_dict_merged = update_groups_and_merge_dictionaries(pcd_list, merged_graph_min)
+            merged_dicts[tuple(coefficients)] = pcd_dict_merged
+            results[tuple(coefficients)][threshold] = {
+                'pcd_dict_merged': pcd_dict_merged
+            }
+
+            if verbose_graph:
+                    # Create a figure for subplots
+                    plt.figure(figsize=(15, 12))
+
+                    # Draw the first graph
+                    plt.subplot(1, 2, 1)  # 1 row, 2 columns, 1st subplot
+                    draw_graph(merged_graph, "Correspondences for All Viewpoints and Mask IDs before optimization", 121)
+
+                    # Draw the second graph
+                    plt.subplot(1, 2, 2)  # 1 row, 2 columns, 2nd subplot
+                    draw_graph(merged_graph_min, "Correspondences for All Viewpoints and Mask IDs after optimization", 122)
+
+                    # Display the plot
+                    plt.show()
     
     ################################################################################################
     ######################## Step 3 in pipeline: Region Merging Method #############################
     ################################################################################################
+    print("Step 3", flush=True)
     labels_list = []
     for coefficients, merged_dicts in results.items():
         for threshold, result in merged_dicts.items():
@@ -426,7 +455,13 @@ def cal_scenes(pcd_list, index, voxel_size, voxelize, th=50, coefficient_combina
     for i, pcd_dict in enumerate(pcd_list):
         if i != index: # i > index
             input_dict_1.update(pcd_dict)
+            group_ids = input_dict_1["group"]
+            unique_groups = np.unique(group_ids).astype(int)
+            print(f"A: Unique groups for view j (input): {unique_groups}")
             pcd1 = make_open3d_point_cloud(input_dict_1, voxelize, th)
+            group_ids = input_dict_1["group"]
+            unique_groups = np.unique(group_ids).astype(int)
+            print(f"B: Unique groups for view j (input): {unique_groups}")
             if pcd0 == None:
                 if pcd1 == None:                    
                     return merged_graph, pcd_list
@@ -437,6 +472,10 @@ def cal_scenes(pcd_list, index, voxel_size, voxelize, th=50, coefficient_combina
                 pcd_list[index].update(input_dict_0)
                 return merged_graph, pcd_list
 
+            group_ids = input_dict_1["group"]
+            unique_groups = np.unique(group_ids).astype(int)
+            print(f"C: Unique groups for view j (input): {unique_groups}")
+
             # Cal Dul-overlap
             match_inds = get_matching_indices(pcd1, pcd0, 1.5 * voxel_size, 1)
             if match_inds:
@@ -445,6 +484,15 @@ def cal_scenes(pcd_list, index, voxel_size, voxelize, th=50, coefficient_combina
                 pcd_list[index].update(input_dict_0)
                 if len(correspondence_graph.nodes) > 0 and len(correspondence_graph.edges) > 0:
                     merged_graph = nx.compose(merged_graph, correspondence_graph)
+                    # if verbose_graph:
+                    #     # Create a figure for subplots
+                    #     plt.figure(figsize=(15, 12))
+
+                    #     # Draw the first graph
+                    #     draw_graph(correspondence_graph, "Correspondence Graph between two viewpoints", 121)
+
+                    #     # Display the plot
+                    #     plt.show()
 
     return merged_graph, pcd_list
 
@@ -457,6 +505,9 @@ def cal_graph(input_dict, new_input_dict, match_inds, coefficient_combinations=[
 
     group_0 = input_dict["group"]
     group_1 = new_input_dict["group"]
+    print(f"Unique groups for view i: {set(group_0)}")
+    print(f"Unique groups for view j: {set(group_1)}")
+
     coord_0 = input_dict["coord"]
     coord_1 = new_input_dict["coord"]
     view_ids_0 = input_dict["viewpoint_id"]
@@ -471,8 +522,10 @@ def cal_graph(input_dict, new_input_dict, match_inds, coefficient_combinations=[
     predicted_ious_0 = input_dict["predicted_iou"]
     predicted_ious_1 = new_input_dict["predicted_iou"]
 
-    unique_nodes_0 = list(set(zip(view_names_0, group_0)))
-    unique_nodes_1 = list(set(zip(view_names_1, group_1)))
+    unique_nodes_0 = list(set(zip(view_ids_0, group_0)))
+    unique_nodes_1 = list(set(zip(view_ids_1, group_1)))
+    print(f"Unique Nodes for view i: {unique_nodes_0}")
+    print(f"Unique Nodes for view j: {unique_nodes_1}")
 
     # Initialize the graph
     correspondence_graph = nx.DiGraph()   
@@ -481,6 +534,8 @@ def cal_graph(input_dict, new_input_dict, match_inds, coefficient_combinations=[
         correspondence_graph.add_node(node)
     for node in unique_nodes_1:
         correspondence_graph.add_node(node)
+
+    print(f"correspondence_graph: {correspondence_graph}")
 
     # Calculate the group number correspondence of overlapping points
     point_cnt_group_0 = {}
@@ -594,11 +649,12 @@ def cal_graph(input_dict, new_input_dict, match_inds, coefficient_combinations=[
             edge_data['cost'][tuple(coefficients)] = cost_value
 
         correspondence_graph.add_edge(
-            (view_name_i, group_i), 
-            (view_name_j, group_j), 
+            (view_id_i, group_i), 
+            (view_id_j, group_j), 
             **edge_data
         )
         #print(f"key: {key} and count: {count} and cost: {edge_data['cost']}")
+    print(f"correspondence_graph: {correspondence_graph}")
 
     return correspondence_graph, input_dict, new_input_dict
 
@@ -653,16 +709,16 @@ def update_groups_and_merge_dictionaries(pcd_list, merged_graph_min):
 
     # Iterate over the pcd_list and update group information
     for pcd in pcd_list:
-        viewpoint_name = pcd["viewpoint_name"][0]
+        viewpoint_id = pcd["viewpoint_id"][0]
         mask_ids = pcd["group"]
         
         # Create a mapping from old mask ids to new group ids
         new_groups = []
         cnt = 0
         for mask_id in mask_ids:
-            if (viewpoint_name, mask_id) in final_group_map:
+            if (viewpoint_id, mask_id) in final_group_map:
                 #print(f"mask_id: {mask_id}, mapping: {final_group_map[(viewpoint_name, mask_id)]}")
-                new_groups.append(final_group_map[(viewpoint_name, mask_id)])
+                new_groups.append(final_group_map[(viewpoint_id, mask_id)])
             else:
                 new_groups.append(-1)
                 cnt+=1
@@ -681,6 +737,7 @@ def update_groups_and_merge_dictionaries(pcd_list, merged_graph_min):
     return voxelize(pcd_dict)
 
 def make_open3d_point_cloud(input_dict, voxelize, th):
+    print(f"len input_dict[group]: {len(input_dict['group'])}", flush=True)
     input_dict["group"] = remove_small_group(input_dict["group"], th)
     # input_dict = voxelize(input_dict)
 
@@ -700,7 +757,7 @@ def get_args():
     parser.add_argument('--save_2dmask_path', type=str, default='', help='Directory where to save 2D segmentation results')
     parser.add_argument('--sam_checkpoint_path', type=str, required=True, help='Path to the SAM checkpoint')
     parser.add_argument('--voxel_size', type=float, default=0.05, help='Voxel size for downsampling')
-    parser.add_argument('--th', type=int, default=50, help='Threshold for ignoring small groups to reduce noise')
+    parser.add_argument('--th', type=int, default=10, help='Threshold for ignoring small groups to reduce noise')
     parser.add_argument('--category_mapping_path', type=str, default='', help='Path to Matterport dataset semantic class id mapping')
     parser.add_argument('--gt_data_path', type=str, default='', help='The path of 3D ground truth data (color, panoptic segmented)')
     return parser.parse_args()
