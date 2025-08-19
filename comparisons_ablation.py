@@ -18,7 +18,7 @@ def print_nested_dict(d, indent=0):
             print('    ' * (indent + 1) + f"Value {value}")
 
 # Define base directory paths
-base_dir = '/home/ayilmaz/ws_segment_3d/SegmentAnything3D/'
+base_dir = '/home/ayilmaz/ws_segment_3d/GIA3D/'
 #comparisons_dir = os.path.join(base_dir, 'output_global_merger_ablation/th_0_5_merged_nodes/')
 #comparisons_dir = os.path.join(base_dir, 'output_global_merger_ablation/th_0_2/')
 comparisons_dir = os.path.join(base_dir, 'output_global_merger_ablation/') # scene0032_00, scene0118_01, scene0441_00, scene0498_00, scene0690_01, scene0703_01
@@ -69,6 +69,8 @@ threshold_to_optimal_coefficients_scenes = {}
 gt = "Instance"
 
 for scene_name, files in scene_files.items():
+    if scene_name != 'scene0032_00':
+        continue
     print(f"Processing scene: {scene_name}")
     
     # Initialize a temporary dictionary to hold data from all parts for the current scene
@@ -157,10 +159,10 @@ for scene_name, files in scene_files.items():
             if is_sorted:
                 # Plotting the sorted data
                 #plt.plot(sorted_coefficients_str, sorted_overall_accuracy_list, marker='o')
-                plt.plot(vicinity_coefficients, vicinity_overall_accuracy, marker='o', label='SAM3D-G')
+                plt.plot(vicinity_coefficients, vicinity_overall_accuracy, marker='o', label='GIA3D')
             else:
                 # Plotting the unsorted data
-                plt.plot(coefficients_str, overall_accuracy_list, marker='o', label='SAM3D-G')
+                plt.plot(coefficients_str, overall_accuracy_list, marker='o', label='GIA3D')
 
             # Plot the baseline accuracy as a horizontal line if available
             if baseline_accuracy is not None:
@@ -300,47 +302,47 @@ for th, coef in threshold_to_mean_coefficients.items():
     rounded_coef = [round(c, 3) for c in coef]
     print(f"threshold: {round(th,3)} and averaged coefficients: {rounded_coef}")
 
-'''# Prepare the plot with improved visualization
-plt.figure(figsize=(10, 6))
-plt.grid(True, which='both', linestyle='--', linewidth=0.5)
+# # Prepare the plot with improved visualization
+# plt.figure(figsize=(10, 6))
+# plt.grid(True, which='both', linestyle='--', linewidth=0.5)
 
-# Updated styles for better differentiation
-colors = ['b', 'g', 'r', 'purple']
-styles = ['-', '--', '-.', ':']
-markers = ['o', 's', '^', 'D']
-labels = [r'$\lambda_1$', r'$\lambda_2$', r'$\lambda_3$', r'$\lambda_4$']  # Greek letters for Lambda
+# # Updated styles for better differentiation
+# colors = ['b', 'g', 'r', 'purple']
+# styles = ['-', '--', '-.', ':']
+# markers = ['o', 's', '^', 'D']
+# labels = [r'$\lambda_1$', r'$\lambda_2$', r'$\lambda_3$', r'$\lambda_4$']  # Greek letters for Lambda
 
-# Fit a line and plot each coefficient with respect to thresholds
-for i in range(coefficients.shape[1]):
-    x = thresholds.reshape(-1, 1)
-    y = coefficients[:, i]
+# # Fit a line and plot each coefficient with respect to thresholds
+# for i in range(coefficients.shape[1]):
+#     x = thresholds.reshape(-1, 1)
+#     y = coefficients[:, i]
     
-    # Linear regression fit
-    model = LinearRegression()
-    model.fit(x, y)
-    y_pred = model.predict(x)
+#     # Linear regression fit
+#     model = LinearRegression()
+#     model.fit(x, y)
+#     y_pred = model.predict(x)
     
-    # Plot the original data with unique markers
-    plt.plot(thresholds, y, marker=markers[i], color=colors[i], linestyle='None', 
-             label=f'{labels[i]} (data)', markersize=8)
+#     # Plot the original data with unique markers
+#     plt.plot(thresholds, y, marker=markers[i], color=colors[i], linestyle='None', 
+#              label=f'{labels[i]} (data)', markersize=8)
     
-    # Plot the fitted line with different styles
-    plt.plot(thresholds, y_pred, linestyle=styles[i], linewidth=3, color=colors[i], label=f'{labels[i]} (fit)')
+#     # Plot the fitted line with different styles
+#     plt.plot(thresholds, y_pred, linestyle=styles[i], linewidth=3, color=colors[i], label=f'{labels[i]} (fit)')
 
-# Labeling the plot with larger fonts
-plt.xlabel('Threshold', fontsize=16)
-plt.ylabel('Coefficient Values', fontsize=16)
-plt.title('Coefficient Values vs. Threshold with Linear Fit', fontsize=18)
-plt.xticks(fontsize=14)
-plt.yticks(fontsize=14)
-plt.legend(fontsize=14)
-plt.tight_layout()
+# # Labeling the plot with larger fonts
+# plt.xlabel('Threshold', fontsize=16)
+# plt.ylabel('Coefficient Values', fontsize=16)
+# plt.title('Coefficient Values vs. Threshold with Linear Fit', fontsize=18)
+# plt.xticks(fontsize=14)
+# plt.yticks(fontsize=14)
+# plt.legend(fontsize=14)
+# plt.tight_layout()
 
-# Save the plot with high quality for academic papers
-plt.savefig('/mnt/data/coefficient_vs_threshold_final.png', dpi=300)
+# # Save the plot with high quality for academic papers
+# plt.savefig('/mnt/data/coefficient_vs_threshold_final.png', dpi=300)
 
-# Show the plot
-plt.show()'''
+# # Show the plot
+# plt.show()
 
 
 

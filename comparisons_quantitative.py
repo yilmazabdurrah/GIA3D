@@ -18,7 +18,7 @@ def print_nested_dict(d, indent=0):
             print('    ' * (indent + 1) + f"Value {value}")
 
 # Define base directory paths
-base_dir = '/home/ayilmaz/ws_segment_3d/SegmentAnything3D/'
+base_dir = '/home/ayilmaz/ws_segment_3d/GIA3D/'
 #comparisons_dir = os.path.join(base_dir, 'output_global_merger_ablation/th_0_5_merged_nodes/')
 #comparisons_dir = os.path.join(base_dir, 'output_global_merger_ablation/th_0_2/')
 comparisons_dir = os.path.join(base_dir, 'output_global_merger_comparisons/')
@@ -259,4 +259,152 @@ for i, ax in enumerate(axs):
 # Adjust layout
 plt.tight_layout()
 plt.show()
+
+improvement_data = []
+for class_id in aggregated_pq_stats['baseline']:
+    baseline_mean = aggregated_pq_stats['baseline'][class_id]['mean']
+    global_mean = aggregated_pq_stats['global'][class_id]['mean']
+    if baseline_mean == 0:
+        improvement = np.inf if global_mean > 0 else 0
+    else:
+        improvement = ((global_mean - baseline_mean) / baseline_mean) * 100
+    improvement_data.append((class_id, improvement))
+
+# Sort by improvement descending
+sorted_improvement = sorted(improvement_data, key=lambda x: x[1], reverse=True)
+
+# Select top 15 and bottom 15
+top_15 = sorted_improvement[:15]
+bottom_15 = sorted_improvement[-15:]
+
+# Combine and prepare plot data
+plot_data = top_15 + [("...", 0)] + bottom_15  # Add placeholder for dots
+class_labels = [
+    ScanNet200_class_id_to_name.get(class_id, "...") if class_id != "..." else "..."
+    for class_id, _ in plot_data
+]
+improvements = [imp for _, imp in plot_data]
+
+# Create plot
+fig, ax = plt.subplots(figsize=(14, 6))
+x = np.arange(len(plot_data))
+bars = ax.bar(x, improvements, color=['green' if i < 15 else 'red' if i > 15 else 'gray' for i in range(len(plot_data))])
+
+# Formatting
+ax.set_ylabel('PQ % Improvement (GIA3D vs SAM3D)', fontsize=14)
+ax.set_title('Top 15 and Bottom 15 Semantic Classes by PQ Improvement', fontsize=16)
+ax.set_xticks(x)
+ax.set_xticklabels(class_labels, rotation=45, ha='right', fontsize=12)
+ax.axhline(0, color='black', linewidth=0.8)
+plt.tight_layout()
+plt.show()
+
+# Calculate percentage improvement and store with PQ values
+improvement_data = []
+for class_id in aggregated_pq_stats['baseline']:
+    baseline_mean = aggregated_pq_stats['baseline'][class_id]['mean']
+    global_mean = aggregated_pq_stats['global'][class_id]['mean']
+    if baseline_mean == 0:
+        improvement = np.inf if global_mean > 0 else 0
+    else:
+        improvement = ((global_mean - baseline_mean) / baseline_mean) * 100
+    improvement_data.append((class_id, baseline_mean, global_mean, improvement))
+
+# Sort by improvement descending
+sorted_improvement = sorted(improvement_data, key=lambda x: x[3], reverse=True)
+
+# Select top 15 and bottom 15
+top_15 = sorted_improvement[:15]
+bottom_15 = sorted_improvement[-15:]
+
+# Combine and prepare plot data
+plot_data = top_15 + [("...", 0, 0, 0)] + bottom_15
+class_labels = [
+    ScanNet200_class_id_to_name.get(class_id, "...") if class_id != "..." else "..."
+    for class_id, _, _, _ in plot_data
+]
+
+# Setup for plotting
+x = np.arange(len(plot_data))
+width = 0.35
+
+fig, ax = plt.subplots(figsize=(16, 6))
+
+# Extract PQ values
+baseline_means = [b for (_, b, _, _) in plot_data]
+global_means = [g for (_, _, g, _) in plot_data]
+
+# Plot SAM3D (baseline)
+ax.bar(x - width/2, baseline_means, width, label='SAM3D', edgecolor='black', linestyle='--')
+
+# Plot GIA3D (global)
+bars = ax.bar(x + width/2, global_means, width, label='GIA3D')
+
+# Annotate improvement percentages above GIA3D bars (skip ellipsis)
+for idx, (_, _, _, improvement) in enumerate(plot_data):
+    if class_labels[idx] != "...":
+        ax.text(x[idx] + width/2, global_means[idx] + 0.01,
+                f"{improvement:.1f}%", ha='center', va='bottom', fontsize=9, rotation=45)
+
+# Labels and formatting
+ax.set_ylabel('Panoptic Quality', fontsize=14)
+ax.set_xticks(x)
+ax.set_xticklabels(class_labels, rotation=45, ha='right', fontsize=11)
+ax.set_ylim(0.0, 1.05)
+ax.axvline(15.5, color='gray', linestyle='--')  # Visual separation at ellipsis
+ax.legend()
+
+plt.tight_layout()
+plt.show()
+
+# Prepare ellipsis entries: only the center one will be labeled "..."
+ellipsis_entries = [("...", 0, 0, 0)] * 3
+
+# Combine final plot data
+plot_data = top_15 + ellipsis_entries + bottom_15
+
+# Generate class labels with only center ellipsis labeled
+class_labels = []
+for i, (class_id, _, _, _) in enumerate(plot_data):
+    if class_id == "...":
+        # Label only the middle ellipsis (second of three)
+        if len(class_labels) == len(top_15) + 1:
+            class_labels.append("...")
+        else:
+            class_labels.append("")
+    else:
+        class_labels.append(ScanNet200_class_id_to_name.get(class_id, "..."))
+
+# Setup for plotting
+x = np.arange(len(plot_data))
+width = 0.35
+
+fig, ax = plt.subplots(figsize=(18, 6))
+
+# Extract PQ values
+baseline_means = [b for (_, b, _, _) in plot_data]
+global_means = [g for (_, _, g, _) in plot_data]
+
+# Plot SAM3D (baseline)
+ax.bar(x - width/2, baseline_means, width, label='SAM3D', edgecolor='black', linestyle='--')
+
+# Plot GIA3D (global)
+bars = ax.bar(x + width/2, global_means, width, label='GIA3D')
+
+# Annotate % improvement above GIA3D bars (skip ellipsis)
+for idx, (_, _, _, improvement) in enumerate(plot_data):
+    if class_labels[idx] not in ["", "..."]:
+        ax.text(x[idx] + width/2, global_means[idx] + 0.01,
+                f"{improvement:.1f}%", ha='center', va='bottom', fontsize=9, rotation=45)
+
+# Labels and formatting
+ax.set_ylabel('Panoptic Quality', fontsize=14)
+ax.set_xticks(x)
+ax.set_xticklabels(class_labels, rotation=45, ha='right', fontsize=11)
+ax.set_ylim(0.0, 1.05)
+ax.legend()
+
+plt.tight_layout()
+plt.show()
+
 

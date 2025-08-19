@@ -20,8 +20,8 @@ import glob
 
 from segment_anything import build_sam, SamAutomaticMaskGenerator
 
-save_mask = False
-verbose_graph = True
+save_mask = True
+verbose_graph = False
 
 def parse_conf_file(conf_data):
     """Parse the .conf file to extract intrinsics matrices and scan entries."""
@@ -172,9 +172,29 @@ def get_matterport_pcd(scene_name, color_img_path, depth_img_path, color_img_nam
     return pcd_dict
 
 def seg_pcd(scene_name, mask_generator, voxelize, voxel_size, th, save_path, save_2dmask_path, gt_data_path):
-    ################################################################################################
-    ###################### Step 1 in pipeline: SAM Generate Masks ##################################
-    ################################################################################################
+    # ################################################################################################
+    # ###################### Step 1 in pipeline: SAM Generate Masks ##################################
+    # ################################################################################################
+
+    # temp_save_path = os.path.join(save_path, scene_name, "step1", "temp_pcd_list_.pkl")
+
+    # # Load the pcd_list back from the pickle file
+    # with open(temp_save_path, 'rb') as f:
+    #     list1 = pickle.load(f)
+
+    # temp_save_path = os.path.join(save_path, scene_name, "step1", "temp_pcd_list_264.pkl")
+    # with open(temp_save_path, 'rb') as f:
+    #     list2 = pickle.load(f)
+
+    # # Merge the lists
+    # merged_list = list1 + list2
+
+    # os.makedirs(os.path.join(save_path,scene_name,"step1"), exist_ok=True)
+    # temp_save_path = os.path.join(save_path, scene_name, "step1", f"temp_pcd_list__.pkl")
+    # with open(temp_save_path, 'wb') as f:
+    #     pickle.dump(merged_list, f)
+    # print(f"Saved pcd_list with {len(merged_list)} entries to {temp_save_path}", flush=True)
+
     print("Step 1", flush=True)
     pcd_list = []
     # Extract relevant data from zipped files within each scene
@@ -189,117 +209,125 @@ def seg_pcd(scene_name, mask_generator, voxelize, voxel_size, th, save_path, sav
             _, scan_entries = parse_conf_file(conf_data)
 
         # For demo, take only first N viewpoints
-        # scan_entries = scan_entries[:5]
+        #scan_entries = scan_entries[600:]
         max_indice = len(scan_entries) - 1
         print(f"Number of viewpoints in the list: {len(scan_entries)}", flush=True)
-        # Process each viewpoint (each scan entry in conf file)
-        for idx, entry in enumerate(scan_entries):
-            print(f"Processing view {idx}/{max_indice} of {scene_name} using RGB: {entry['color_file']} and Depth: {entry['depth_file']} images", flush=True)
+        # # Process each viewpoint (each scan entry in conf file)
+        # for idx, entry in enumerate(scan_entries):
+        #     print(f"Processing view {idx}/{max_indice} of {scene_name} using RGB: {entry['color_file']} and Depth: {entry['depth_file']} images", flush=True)
             
-            depth_file = f"{scene_name}//undistorted_depth_images/{entry['depth_file']}"
-            color_file = f"{scene_name}//undistorted_color_images/{entry['color_file']}"
+        #     depth_file = f"{scene_name}//undistorted_depth_images/{entry['depth_file']}"
+        #     color_file = f"{scene_name}//undistorted_color_images/{entry['color_file']}"
 
-            try:
-                # Create temporary files to store extracted data
-                with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_depth, \
-                        tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp_color, \
-                        tempfile.NamedTemporaryFile(suffix='.txt', delete=False) as tmp_pose, \
-                        tempfile.NamedTemporaryFile(suffix='.txt', delete=False) as tmp_intrinsics:
+        #     try:
+        #         # Create temporary files to store extracted data
+        #         with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp_depth, \
+        #                 tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp_color, \
+        #                 tempfile.NamedTemporaryFile(suffix='.txt', delete=False) as tmp_pose, \
+        #                 tempfile.NamedTemporaryFile(suffix='.txt', delete=False) as tmp_intrinsics:
 
-                    # Extract depth image
-                    with depth_zip.open(depth_file) as depth_data:
-                        tmp_depth.write(depth_data.read())
+        #             # Extract depth image
+        #             with depth_zip.open(depth_file) as depth_data:
+        #                 tmp_depth.write(depth_data.read())
                     
-                    # Extract color image
-                    with rgb_zip.open(color_file) as color_data:
-                        tmp_color.write(color_data.read())
+        #             # Extract color image
+        #             with rgb_zip.open(color_file) as color_data:
+        #                 tmp_color.write(color_data.read())
                     
-                    # Save pose to temporary file
-                    np.savetxt(tmp_pose.name, entry['pose'])
+        #             # Save pose to temporary file
+        #             np.savetxt(tmp_pose.name, entry['pose'])
                     
-                    # Save intrinsics to temporary file
-                    np.savetxt(tmp_intrinsics.name, entry['intrinsics'])
+        #             # Save intrinsics to temporary file
+        #             np.savetxt(tmp_intrinsics.name, entry['intrinsics'])
 
-                    color_img_name_base = os.path.splitext(entry['color_file'])[0]
+        #             color_img_name_base = os.path.splitext(entry['color_file'])[0]
 
-                    pcd_dict = get_matterport_pcd(
-                        scene_name=scene_name,
-                        color_img_path=tmp_color.name,
-                        depth_img_path=tmp_depth.name,
-                        color_img_name=color_img_name_base,
-                        intrinsics_path=tmp_intrinsics.name,
-                        pose_path=tmp_pose.name,
-                        save_2dmask_path=save_2dmask_path,
-                        mask_generator=mask_generator
-                    )
-                    if len(pcd_dict["coord"]) == 0:
-                        continue
+        #             pcd_dict = get_matterport_pcd(
+        #                 scene_name=scene_name,
+        #                 color_img_path=tmp_color.name,
+        #                 depth_img_path=tmp_depth.name,
+        #                 color_img_name=color_img_name_base,
+        #                 intrinsics_path=tmp_intrinsics.name,
+        #                 pose_path=tmp_pose.name,
+        #                 save_2dmask_path=save_2dmask_path,
+        #                 mask_generator=mask_generator
+        #             )
+        #             if len(pcd_dict["coord"]) == 0:
+        #                 continue
 
-                    viewpoint_ids = [idx + 1] * len(pcd_dict["coord"])
-                    viewpoint_names = [color_img_name_base] * len(pcd_dict["coord"])
+        #             viewpoint_ids = [idx + 1] * len(pcd_dict["coord"])
+        #             viewpoint_names = [color_img_name_base] * len(pcd_dict["coord"])
 
-                    print(f"before voxelization len pcd_dict[group]: {len(pcd_dict['coord'])}", flush=True)
+        #             print(f"before voxelization len pcd_dict[group]: {len(pcd_dict['coord'])}", flush=True)
 
-                    pcd_dict.update(viewpoint_id=viewpoint_ids, viewpoint_name=viewpoint_names)
-                    pcd_dict = voxelize(pcd_dict)
+        #             pcd_dict.update(viewpoint_id=viewpoint_ids, viewpoint_name=viewpoint_names)
+        #             pcd_dict = voxelize(pcd_dict)
 
-                    print(f"after voxelization len pcd_dict[group]: {len(pcd_dict['coord'])}", flush=True)
+        #             print(f"after voxelization len pcd_dict[group]: {len(pcd_dict['coord'])}", flush=True)
                     
-                    pcd_list.append(pcd_dict)
+        #             pcd_list.append(pcd_dict)
 
-                    # if (idx + 1) % 100 == 0 or idx == max_indice:
-                    #     os.makedirs(os.path.join(save_path,scene_name), exist_ok=True)
-                    #     temp_save_path = os.path.join(save_path, scene_name, f"temp_pcd_list_{idx + 1}.pkl")
-                    #     with open(temp_save_path, 'wb') as f:
-                    #         pickle.dump(pcd_list, f)
-                    #     print(f"Saved partial pcd_list with {len(pcd_list)} entries to {temp_save_path}", flush=True)
-                    #     pcd_list.clear()
+        #             # if (idx + 1) % 100 == 0 or idx == max_indice:
+        #             #     os.makedirs(os.path.join(save_path,scene_name), exist_ok=True)
+        #             #     temp_save_path = os.path.join(save_path, scene_name, f"temp_pcd_list_{idx + 1}.pkl")
+        #             #     with open(temp_save_path, 'wb') as f:
+        #             #         pickle.dump(pcd_list, f)
+        #             #     print(f"Saved partial pcd_list with {len(pcd_list)} entries to {temp_save_path}", flush=True)
+        #             #     pcd_list.clear()
 
-                    group_ids = pcd_dict["group"]
-                    unique_groups = np.unique(group_ids).astype(int)
-                    print(f"Unique groups for view {idx}/{max_indice} of {scene_name}: {unique_groups}")
+        #             group_ids = pcd_dict["group"]
+        #             unique_groups = np.unique(group_ids).astype(int)
+        #             print(f"Unique groups for view {idx}/{max_indice} of {scene_name}: {unique_groups}")
 
-                    if save_mask:
-                        if not os.path.exists(os.path.join(save_2dmask_path, scene_name, 'masks')):
-                            os.makedirs(os.path.join(save_2dmask_path, scene_name, 'masks'))
+        #             if save_mask:
+        #                 if not os.path.exists(os.path.join(save_2dmask_path, scene_name, 'masks')):
+        #                     os.makedirs(os.path.join(save_2dmask_path, scene_name, 'masks'))
 
-                        # Save PLY color file
-                        pcd = o3d.geometry.PointCloud()
-                        pcd.points = o3d.utility.Vector3dVector(pcd_dict["coord"])
-                        pcd.colors = o3d.utility.Vector3dVector(pcd_dict["color"] / 255.0)  # normalize RGB to [0,1]
-                        ply_filename = os.path.join(save_2dmask_path, scene_name, 'masks', f"{color_img_name_base}.ply")
-                        o3d.io.write_point_cloud(ply_filename, pcd)
-                        print(f"Saved, colored point cloud as {ply_filename}")
+        #                 # Save PLY color file
+        #                 pcd = o3d.geometry.PointCloud()
+        #                 pcd.points = o3d.utility.Vector3dVector(pcd_dict["coord"])
+        #                 pcd.colors = o3d.utility.Vector3dVector(pcd_dict["color"] / 255.0)  # normalize RGB to [0,1]
+        #                 ply_filename = os.path.join(save_2dmask_path, scene_name, 'masks', f"{color_img_name_base}.ply")
+        #                 o3d.io.write_point_cloud(ply_filename, pcd)
+        #                 print(f"Saved, colored point cloud as {ply_filename}")
 
-                        # Save PLY instance file
-                        num_groups = len(unique_groups)
-                        group_colors = generate_colors(num_groups)
-                        group_color_map = {group: group_colors[i] for i, group in enumerate(unique_groups)}
-                        seg_colors = np.array([group_color_map[int(g)] for g in group_ids])
-                        seg_pcd = o3d.geometry.PointCloud()
-                        seg_pcd.points = o3d.utility.Vector3dVector(pcd_dict["coord"])
-                        seg_pcd.colors = o3d.utility.Vector3dVector(seg_colors)
-                        seg_ply_filename = os.path.join(save_2dmask_path, scene_name, 'masks', f"{color_img_name_base}_mask.ply")
-                        o3d.io.write_point_cloud(seg_ply_filename, seg_pcd)
-                        print(f"Saved, instance segmentation point cloud as {seg_ply_filename}")
+        #                 # Save PLY instance file
+        #                 num_groups = len(unique_groups)
+        #                 group_colors = generate_colors(num_groups)
+        #                 group_color_map = {group: group_colors[i] for i, group in enumerate(unique_groups)}
+        #                 seg_colors = np.array([group_color_map[int(g)] for g in group_ids])
+        #                 seg_pcd = o3d.geometry.PointCloud()
+        #                 seg_pcd.points = o3d.utility.Vector3dVector(pcd_dict["coord"])
+        #                 seg_pcd.colors = o3d.utility.Vector3dVector(seg_colors)
+        #                 seg_ply_filename = os.path.join(save_2dmask_path, scene_name, 'masks', f"{color_img_name_base}_mask.ply")
+        #                 o3d.io.write_point_cloud(seg_ply_filename, seg_pcd)
+        #                 print(f"Saved, instance segmentation point cloud as {seg_ply_filename}")
 
-                        # Save RGB image file
-                        color_img = cv2.imread(tmp_color.name)
-                        color_save_path = os.path.join(save_2dmask_path, scene_name, 'masks', f"{color_img_name_base}_rgb.png")
-                        cv2.imwrite(color_save_path, color_img)
-                        print(f"Saved, color image as {color_save_path}")
+        #                 # Save RGB image file
+        #                 color_img = cv2.imread(tmp_color.name)
+        #                 color_save_path = os.path.join(save_2dmask_path, scene_name, 'masks', f"{color_img_name_base}_rgb.png")
+        #                 cv2.imwrite(color_save_path, color_img)
+        #                 print(f"Saved, color image as {color_save_path}")
 
-                    # Clean up temporary files
-                    os.unlink(tmp_depth.name)
-                    os.unlink(tmp_color.name)
-                    os.unlink(tmp_pose.name)
-                    os.unlink(tmp_intrinsics.name)
+        #             # Clean up temporary files
+        #             os.unlink(tmp_depth.name)
+        #             os.unlink(tmp_color.name)
+        #             os.unlink(tmp_pose.name)
+        #             os.unlink(tmp_intrinsics.name)
                     
-                    print(f"Instance segmentation results for view {idx} of {scene_name} assigned to a dictionary", flush=True)
+        #             print(f"Instance segmentation results for view {idx} of {scene_name} assigned to a dictionary", flush=True)
 
-            except Exception as e:
-                print(f"Error processing view {idx} for scene {scene_name}: {e}")
-                continue
+        #         if (idx + 1) % 200 == 0 or idx == max_indice:
+        #             os.makedirs(os.path.join(save_path,scene_name,"step1"), exist_ok=True)
+        #             temp_save_path = os.path.join(save_path, scene_name, "step1", f"temp_pcd_list_{idx + 1}.pkl")
+        #             with open(temp_save_path, 'wb') as f:
+        #                 pickle.dump(pcd_list, f)
+        #             print(f"Saved pcd_list with {len(pcd_list)} entries to {temp_save_path}", flush=True)
+        #             pcd_list.clear()
+
+        #     except Exception as e:
+        #         print(f"Error processing view {idx} for scene {scene_name}: {e}")
+        #         continue
     # pcd_list = []
     # temp_files = sorted(glob.glob(os.path.join(save_2dmask_path, scene_name, "temp_pcd_list_*.pkl")))
 
@@ -310,45 +338,55 @@ def seg_pcd(scene_name, mask_generator, voxelize, voxel_size, th, save_path, sav
     #     os.remove(file)
     #     print(f"Loaded {len(temp_list)} entries from {file} and deleted", flush=True)
 
-    os.makedirs(os.path.join(save_path,scene_name,"step1"), exist_ok=True)
-    temp_save_path = os.path.join(save_path, scene_name, "step1", "temp_pcd_list.pkl")
-    with open(temp_save_path, 'wb') as f:
-        pickle.dump(pcd_list, f)
-    print(f"Saved pcd_list with {len(pcd_list)} entries to {temp_save_path}", flush=True)
-
     ################################################################################################
     ### Step 2 in pipeline: Merge All Pointclouds in one shot globally to get single point cloud ###
     ################################################################################################
+    
     print("Step 2", flush=True)
-    if len(pcd_list) != 1:
+    
+    temp_pickle_dir = os.path.join(save_path, scene_name, "step1")
+    pickle_files = sorted([f for f in os.listdir(temp_pickle_dir) if f.endswith(".pkl")])
 
-        for index in range(1, len(pcd_list)):
-            # Get the 'group' value of the elements
-            group_index_last = pcd_list[index - 1]["group"]
-            group_index = pcd_list[index]["group"]
+    merged_graph = nx.DiGraph()
+    merged_graph_min = nx.DiGraph()
+    
+    for i, file_name in enumerate(pickle_files):
+        file_path = os.path.join(temp_pickle_dir, file_name)
+        print(f"Processing {file_name} ({i+1}/{len(pickle_files)})", flush=True)
 
-            # Update the current 'group' array
-            group_index[group_index != -1] += group_index_last.max() + 1
-            pcd_list[index]["group"] = group_index
+        with open(file_path, 'rb') as f:
+            pcd_list = pickle.load(f)
 
-        for id, pcd in enumerate(pcd_list):
-            group_ids = pcd["group"]
-            unique_groups = np.unique(group_ids).astype(int)
-            print(f"Unique groups for view {id}/{max_indice} of {scene_name}: {unique_groups}")
+        max_indice = len(pcd_list) - 1
+    
+        if len(pcd_list) != 1:
 
-        coefficients = [[0.07, 0.057, 0.063, 0.811]]
-        threshold = 0.3
+            for index in range(1, len(pcd_list)):
+                # Get the 'group' value of the elements
+                group_index_last = pcd_list[index - 1]["group"]
+                group_index = pcd_list[index]["group"]
 
-        merged_graph = nx.DiGraph()
-        merged_graph_min = nx.DiGraph()
+                # Update the current 'group' array
+                group_index[group_index != -1] += group_index_last.max() + 1
+                pcd_list[index]["group"] = group_index
 
-        for indice in range(len(pcd_list)):
-            print(f"Current viewpoint: {indice}/{max_indice}")
-            corr_graph, pcd_list = cal_scenes(pcd_list, indice, voxel_size=voxel_size, voxelize=voxelize, th=th, coefficient_combinations=coefficients) 
-            if len(corr_graph.nodes) > 0 and len(corr_graph.edges) > 0:
-                merged_graph = nx.compose(merged_graph, corr_graph)
-            del corr_graph
-            gc.collect()
+            for id, pcd in enumerate(pcd_list):
+                group_ids = pcd["group"]
+                unique_groups = np.unique(group_ids).astype(int)
+                print(f"Unique groups for view {id}/{max_indice} of {scene_name}: {unique_groups}")
+
+            #coefficients = [[0.07, 0.057, 0.063, 0.811]]
+            coefficients = [[0.5, 0.0, 0.0, 0.35]]
+            threshold = 0.24
+
+            for indice in range(len(pcd_list)):
+                print(f"Current viewpoint: {indice}/{max_indice}")
+                corr_graph, pcd_list = cal_scenes(pcd_list, indice, voxel_size=voxel_size, voxelize=voxelize, th=th, coefficient_combinations=coefficients) 
+                if len(corr_graph.nodes) > 0 and len(corr_graph.edges) > 0:
+                    merged_graph = nx.compose(merged_graph, corr_graph)
+                del corr_graph
+                gc.collect()
+        print(f"merged_graph: {merged_graph}")
 
         # Initialize the cost matrix with infinity
         large_value = 1e9  # Define a large value to replace infinity
@@ -394,7 +432,9 @@ def seg_pcd(scene_name, mask_generator, voxelize, voxel_size, th, save_path, sav
                             merged_graph_min.add_edge(u, v, **edge_data)
                     else:
                         print("Duplicate edges!!!")
-        
+
+            print(f"merged_graph_min: {merged_graph_min}")
+
             merged_graphs[tuple(coefficients)] = merged_graph_min
             pcd_dict_merged = update_groups_and_merge_dictionaries(pcd_list, merged_graph_min)
             merged_dicts[tuple(coefficients)] = pcd_dict_merged
@@ -402,21 +442,39 @@ def seg_pcd(scene_name, mask_generator, voxelize, voxel_size, th, save_path, sav
                 'pcd_dict_merged': pcd_dict_merged
             }
 
+            # Save PLY instance file
+            group_ids = pcd_dict_merged["group"]
+            unique_groups = np.unique(group_ids).astype(int)
+            num_groups = len(unique_groups)
+            group_colors = generate_colors(num_groups)
+            group_color_map = {group: group_colors[i] for i, group in enumerate(unique_groups)}
+            seg_colors = np.array([group_color_map[int(g)] for g in group_ids])
+            seg_pcd = o3d.geometry.PointCloud()
+            seg_pcd.points = o3d.utility.Vector3dVector(pcd_dict_merged["coord"])
+            seg_pcd.colors = o3d.utility.Vector3dVector(seg_colors)
+
+            filename = f"GIA3D_merged_views_{i}.ply"
+
+            save_segmented_ply_path = os.path.join(save_path, scene_name, filename)
+            os.makedirs(os.path.dirname(save_segmented_ply_path), exist_ok=True)
+            o3d.io.write_point_cloud(save_segmented_ply_path, seg_pcd)
+            print(f"Segmented PC with merged views for {scene_name} is saved to {save_segmented_ply_path}")
+
             if verbose_graph:
-                    # Create a figure for subplots
-                    plt.figure(figsize=(15, 12))
+                # Create a figure for subplots
+                plt.figure(figsize=(15, 12))
 
-                    # Draw the first graph
-                    plt.subplot(1, 2, 1)  # 1 row, 2 columns, 1st subplot
-                    draw_graph(merged_graph, "Correspondences for All Viewpoints and Mask IDs before optimization", 121)
+                # Draw the first graph
+                plt.subplot(1, 2, 1)  # 1 row, 2 columns, 1st subplot
+                draw_graph(merged_graph, "Correspondences for All Viewpoints and Mask IDs before optimization", 121)
 
-                    # Draw the second graph
-                    plt.subplot(1, 2, 2)  # 1 row, 2 columns, 2nd subplot
-                    draw_graph(merged_graph_min, "Correspondences for All Viewpoints and Mask IDs after optimization", 122)
+                # Draw the second graph
+                plt.subplot(1, 2, 2)  # 1 row, 2 columns, 2nd subplot
+                draw_graph(merged_graph_min, "Correspondences for All Viewpoints and Mask IDs after optimization", 122)
 
-                    # Display the plot
-                    plt.show()
-    
+                # Display the plot
+                plt.show()
+
     ################################################################################################
     ######################## Step 3 in pipeline: Region Merging Method #############################
     ################################################################################################
@@ -483,11 +541,11 @@ def cal_scenes(pcd_list, index, voxel_size, voxelize, th=50, coefficient_combina
             input_dict_1.update(pcd_dict)
             group_ids = input_dict_1["group"]
             unique_groups = np.unique(group_ids).astype(int)
-            print(f"A: Unique groups for view j (input): {unique_groups}")
+            #print(f"A: Unique groups for view j (input): {unique_groups}")
             pcd1 = make_open3d_point_cloud(input_dict_1, voxelize, th)
             group_ids = input_dict_1["group"]
             unique_groups = np.unique(group_ids).astype(int)
-            print(f"B: Unique groups for view j (input): {unique_groups}")
+            #print(f"B: Unique groups for view j (input): {unique_groups}")
             if pcd0 == None:
                 if pcd1 == None:                    
                     return merged_graph, pcd_list
@@ -500,7 +558,7 @@ def cal_scenes(pcd_list, index, voxel_size, voxelize, th=50, coefficient_combina
 
             group_ids = input_dict_1["group"]
             unique_groups = np.unique(group_ids).astype(int)
-            print(f"C: Unique groups for view j (input): {unique_groups}")
+            #print(f"C: Unique groups for view j (input): {unique_groups}")
 
             # Cal Dul-overlap
             match_inds = get_matching_indices(pcd1, pcd0, 1.5 * voxel_size, 1)
@@ -647,15 +705,23 @@ def cal_graph(input_dict, new_input_dict, match_inds, coefficient_combinations=[
 
         for coefficients in coefficient_combinations:
             L1, L2, L3, _ = coefficients
-            fd = normalized_feature_difference(feature_i,feature_j)
+            #fd = normalized_feature_difference(feature_i,feature_j,metric='euclidean')
+            #print(f"feature distance - euclidean: {fd}")
+            fd = normalized_feature_difference(feature_i,feature_j,metric='cosine')
+            #print(f"feature distance - cosine: {fd} ... v1-gr: {view_id_i}-{group_i}, v0-gr: {view_id_j}-{group_j}")
             ss = abs(stability_score_i - stability_score_j)
             if ss > 0.5:
                 ss = 0.0
+            #print(f"stability score difference: {ss}")
             piou = abs(predicted_iou_i - predicted_iou_j)
             if piou > 0.5:
                 piou = 0.0
+            #print(f"predicted iou difference: {piou}")
+            #print(f"L1: {L1}, L2: {L2}, L3: {L3}")
             
             cost[overlap_key][tuple(coefficients)] += L1*fd + L2*ss + L3*piou
+
+    #print(f"cost viewpoint_1-group: {view_id_i}-{group_i}, viewpoint_0-group: {view_id_j}-{group_j}: {cost[overlap_key][tuple(coefficients)]}")
 
     # Add edges with costs for all coefficient combinations
     for key, count in group_overlap.items():
@@ -670,8 +736,9 @@ def cal_graph(input_dict, new_input_dict, match_inds, coefficient_combinations=[
 
         for coefficients in coefficient_combinations:
             _, _, _, L4 = coefficients
-            
+            #print(f"L4: {L4}, count_common/count: {count}-{min(point_cnt_group_i, point_cnt_group_j)}, viewpoint_1-group: {view_id_i}-{group_i}, viewpoint_0-group: {view_id_j}-{group_j}")
             cost_value = cost[key][tuple(coefficients)] / count + L4 * max(0, (1 - count / min(point_cnt_group_i, point_cnt_group_j)))
+            #print(f"cost after L4 for viewpoint_1-group: {view_id_i}/{group_i}, viewpoint_0-group: {view_id_j}/{group_j}: {cost_value}")
             edge_data['cost'][tuple(coefficients)] = cost_value
 
         correspondence_graph.add_edge(
@@ -684,12 +751,46 @@ def cal_graph(input_dict, new_input_dict, match_inds, coefficient_combinations=[
 
     return correspondence_graph, input_dict, new_input_dict
 
-def normalized_feature_difference(f_i, f_j):
-    # Calculate the Euclidean norm of the difference
-    difference_norm = np.linalg.norm(f_i - f_j)
-    # Normalize the difference norm
-    normalized_difference = difference_norm / len(f_i)
-    return normalized_difference
+# def normalized_feature_difference(f_i, f_j):
+#     # Calculate the Euclidean norm of the difference
+#     difference_norm = np.linalg.norm(f_i - f_j)
+#     # Normalize the difference norm
+#     normalized_difference = difference_norm / len(f_i)
+#     return normalized_difference
+
+def normalized_feature_difference(feature_i, feature_j, metric='cosine'):
+    """
+    Compute distance between two feature vectors using specified metric.
+
+    Args:
+        feature_i: np.ndarray or torch.Tensor, shape (D,), first feature vector
+        feature_j: np.ndarray or torch.Tensor, shape (D,), second feature vector
+        metric: str, 'cosine' or 'euclidean', distance metric to use
+
+    Returns:
+        float, distance between feature_i and feature_j
+    """
+    # Convert to numpy
+    f_i = feature_i.cpu().numpy() if hasattr(feature_i, 'cpu') else np.asarray(feature_i)
+    f_j = feature_j.cpu().numpy() if hasattr(feature_j, 'cpu') else np.asarray(feature_j)
+    
+    if metric == 'cosine':
+        # Cosine distance: 1 - (f_i·f_j / (||f_i||·||f_j||))
+        norm_i = np.linalg.norm(f_i)
+        norm_j = np.linalg.norm(f_j)
+        if norm_i == 0 or norm_j == 0:
+            return 2.0  # Maximum distance if one vector is zero
+        cosine_sim = np.dot(f_i, f_j) / (norm_i * norm_j)
+        return 1 - cosine_sim  # Cosine distance in [0, 2]
+    
+    elif metric == 'euclidean':
+        # Euclidean distance: ||f_i - f_j||
+        norm_i = np.linalg.norm(f_i)
+        norm_j = np.linalg.norm(f_j)
+        f_i = f_i / norm_i if norm_i != 0 else f_i
+        f_j = f_j / norm_j if norm_j != 0 else f_j
+        distance = np.linalg.norm(f_i - f_j)
+        return distance  # Euclidean distance in [0, 2]
 
 def update_groups_and_merge_dictionaries(pcd_list, merged_graph_min):
     # Create a mapping for final groups to ensure all connected nodes have the same group
@@ -763,7 +864,7 @@ def update_groups_and_merge_dictionaries(pcd_list, merged_graph_min):
     return voxelize(pcd_dict)
 
 def make_open3d_point_cloud(input_dict, voxelize, th):
-    print(f"len input_dict[group]: {len(input_dict['group'])}", flush=True)
+    #print(f"len input_dict[group]: {len(input_dict['group'])}", flush=True)
     input_dict["group"] = remove_small_group(input_dict["group"], th)
     # input_dict = voxelize(input_dict)
 
@@ -800,9 +901,11 @@ if __name__ == '__main__':
 
     # Load scene names from scans.txt
     with open(args.scans_file_path, 'r') as scans_file:
-        scene_names = scans_file.read().splitlines()
+        scene_names = sorted(scans_file.read().splitlines(), reverse=True)
 
     for scene_name in scene_names:
+        if scene_name == 'zsNo4HB9uLZ' or scene_name == 'ac26ZMwG7aT':
+            continue
         scene_path = os.path.join(args.scans_root, scene_name)
         
         if not os.path.isdir(scene_path):
